@@ -7,3 +7,17 @@ Useful resources:
 2. https://docs.pytorch.org/tutorials/advanced/cpp_custom_ops.html
 3. https://crfm.stanford.edu/2023/07/17/flash2.html
 4. https://medium.com/@yuhezhang/a-simple-yet-deep-explanation-of-flashattention-v1-and-v2-8aa067d9451c
+
+To create venv (with python 3.12.3):
+
+'''
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+'''
+
+To compile code:
+
+```
+python3 python/cuda_backend.py
+```
