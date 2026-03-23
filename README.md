@@ -10,11 +10,11 @@ Useful resources:
 
 To create venv (with python 3.12.3):
 
-'''
+```
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-'''
+```
 
 To compile code:
 
