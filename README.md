@@ -1,6 +1,5 @@
 # flash-attention
-CMPE-755 Final Project, implementing Flash Attention and using it in diffusion models.
-
+implementation of Flash AttentionV2, used in an ML model.
 
 Useful resources:
 1. https://arxiv.org/pdf/2307.08691
