@@ -3,5 +3,13 @@ import torch
 
 flash_attn = load(name="flash_attn_ext", sources=["./src/FlashAttention.cu"], verbose=True)
 
-forward = flash_attn.forward_custom(torch.tensor(0))
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+Q = torch.zeros(6, 100, 2, 2).to(device)
+K = torch.zeros(6, 100, 2, 2).to(device)
+V = torch.zeros(6, 100, 2, 2).to(device)
+
+output, logsumexp = flash_attn.forward_custom(Q, K, V)
+print(output)
+
 backward = flash_attn.backward_custom(torch.tensor(0))
