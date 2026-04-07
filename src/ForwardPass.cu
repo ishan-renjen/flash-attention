@@ -32,23 +32,7 @@ __global__ void forwardKernel(const float* Q, const float* K, const float* V, //
     */
 }
 
-__global__ void backwardKernel(){
-
-}
-
-std::vector<torch::Tensor> forward_pass(torch::Tensor Q, torch::Tensor K, torch::Tensor V){
-    /*
-    Computes the forward pass for our Flash Attention implementation.
-    inputs:
-        torch::Tensor Query, Key, Value: 
-            -must be on cuda
-            -must have 4 dimensions [Batch Size, Heads(1 if single-head attention), N, d] (Nxd) is the Q, K, V matrix dimensions
-    outputs: std::vector<torch::Tensor>
-        torch::Tensor attention output
-            -same dimensions as Q, K, V
-        torch::Tensor logsumexp
-            -logsum exponential numerical calculation to be used in backwards pass
-    */
+std::vector<torch::Tensor> forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V){
     //must be on GPU to use
     TORCH_CHECK(Q.is_cuda(), "Q must be CUDA");
     TORCH_CHECK(K.is_cuda(), "K must be CUDA");
@@ -96,20 +80,10 @@ std::vector<torch::Tensor> forward_pass(torch::Tensor Q, torch::Tensor K, torch:
                                          output.data_ptr<float>(), logsumexp.data_ptr<float>(), 
                                          N, d, Br, Bc, Tr, Tc, attentionScalar);
     cudaError_t err = cudaGetLastError();
-    TORCH_CHECK(err == cudaSuccess, "forwardKernel launch failed: ", cudaGetErrorString(err));
+    TORCH_CHECK(err == cudaSuccess, "forward kernel launch failed: ", cudaGetErrorString(err));
 
     err = cudaDeviceSynchronize();
-    TORCH_CHECK(err == cudaSuccess, "forwardKernel execution failed: ", cudaGetErrorString(err));
+    TORCH_CHECK(err == cudaSuccess, "forward kernel execution failed: ", cudaGetErrorString(err));
 
     return {output, logsumexp};
-}
-
-torch::Tensor backward_pass(torch::Tensor input){
-    printf("backward pass\n");
-    return torch::zeros_like(input);
-}
-
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("forward_custom", &forward_pass, "Custom forward pass (CUDA)");
-    m.def("backward_custom", &backward_pass, "Custom backward pass (CUDA)");
 }
