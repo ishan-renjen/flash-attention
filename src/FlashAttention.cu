@@ -14,10 +14,12 @@ __global__ void backwardKernel(){
 }
 
 torch::Tensor forward_pass(torch::Tensor input){
-
+    printf("forward pass\n");
+    return torch::zeros_like(input);
 }
 
 torch::Tensor backward_pass(torch::Tensor input){
+    printf("backward pass\n");
     return torch::zeros_like(input);
 }
 
