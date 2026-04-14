@@ -23,13 +23,15 @@ class UNetConvBlock(nn.Module):
 class UNetDecodeBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(UNetDecodeBlock, self).__init__()
-        self.upscale = nn.ConvTranspose2d(in_channels, in_channels//2, kernel_size=2, stride=2)
-        self.convblock1 = UNetConvBlock(in_channels, out_channels) #not in_channels//2 b/c it gets concatenated with equal dimensions from skip connection
+        self.decode_block = nn.Sequential(
+                nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),
+                nn.Conv2d(in_channels, in_channels//2, kernel_size=2, stride=2),
+                UNetConvBlock(in_channels, out_channels)) #not in_channels//2 b/c it gets concatenated with equal dimensions from skip connection
 
     def forward(self, x, y):
-        x = self.upscale(x)
-        x = torch.cat([x, y], dim=1) #this may cause issues, i was not sure how to do the concatenation for the skip connection
-        return self.convblock1(x)
+        x = self.decode_block(x)
+        x = torch.cat([x, y], dim=1) 
+        return x
 
 """single encoder block - 2x pooling then double conv block"""
 class UNetEncodeBlock(nn.Module):
@@ -42,22 +44,52 @@ class UNetEncodeBlock(nn.Module):
     def forward(self, x):
         return self.unet_encode_block(x)
 
-"""currently unused - replaced with multi head self attention in u-net bottleneck."""
-# class ResidualBlock(nn.Module):
-#     def __init__(self, in_channels):
-#         super(ResidualBlock, self).__init__()
-#         self.residual_block = nn.Sequential(
-#                                nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1),
-#                                nn.BatchNorm2d(in_channels),
-#                                nn.ReLU(),
-#                                nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1),
-#                                nn.BatchNorm2d(in_channels))
+"""residual block in standard u-net bottleneck."""
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels):
+        super(ResidualBlock, self).__init__()
+        self.residual_block = nn.Sequential(
+                               nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1),
+                               nn.BatchNorm2d(in_channels),
+                               nn.ReLU(),
+                               nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1),
+                               nn.BatchNorm2d(in_channels))
 
-#         self.relu = nn.ReLU()
+        self.relu = nn.ReLU()
 
-#     def forward(self, x):
-#         x0 = self.residual_block(x)
-#         return self.relu(x + x0)
+    def forward(self, x):
+        x0 = self.residual_block(x)
+        return self.relu(x + x0)
+
+"""FFN for TransformerEncoder"""
+class FFN(torch.nn.Module):
+  def __init__(self):
+    super().__init__()
+    self.linear = torch.nn.Linear(512, 2048)
+    self.relu = torch.nn.ReLU()
+    self.linear2 = torch.nn.Linear(2048, 512)
+
+  def forward(self, x):
+    x = self.linear(x)
+    x = self.relu(x)
+    return self.linear2(x)
+
+"""Encoder from Attention is All You Need - used in core of generator bottleneck"""
+class TransformerEncoder(nn.Module):
+    def __init__(self, in_dim, num_heads):
+        super().__init__()
+        self.attention1_encoder = nn.MultiheadAttention(embed_dim=in_dim, num_heads=num_heads)
+        self.ffn_encoder = FFN()
+
+        self.layer_norm = torch.nn.LayerNorm(512)
+
+    def forward(self, x, mask):
+        encoder_embedding_sublayer = self.attention1_encoder(x, x, x, mask)
+        encoder_norm = self.layer_norm(x + encoder_embedding_sublayer)
+        encoder_ffn = self.ffn_encoder(encoder_norm)
+        encoder_output = self.layer_norm(encoder_norm + encoder_ffn)
+
+        return encoder_output
 
 """put together the encode and decode blocks. This is 4 encode layers with 4 decode layers and 1 intermediate encode layer"""
 class Generator(nn.Module):
@@ -73,9 +105,9 @@ class Generator(nn.Module):
         self.encode4    = UNetEncodeBlock(256, 512)
         self.encode5    = UNetEncodeBlock(512, 1024)
         self.encode6    = UNetEncodeBlock(1024, 2048)
-        self.attention1 = nn.MultiheadAttention(2048, 6)
-        self.attention2 = nn.MultiheadAttention(2048, 6)
-        self.attention3 = nn.MultiheadAttention(2048, 6)
+        self.residual1  = ResidualBlock(2048)
+        self.encoder    = TransformerEncoder()
+        self.residual2  = ResidualBlock(2048)
         self.decode1    = UNetDecodeBlock(2048, 1024)
         self.decode2    = UNetDecodeBlock(1024, 512)
         self.decode3    = UNetDecodeBlock(512, 256)
@@ -90,9 +122,9 @@ class Generator(nn.Module):
         x3 = self.encode4(x2)
         x4 = self.encode5(x3)
         x5 = self.encode6(x4)
-        x5 = self.attention1(x5)
-        x5 = self.attention2(x5)
-        x5 = self.attention3(x5)
+        x5 = self.residual1(x5)
+        x5 = self.encoder(x5)
+        x5 = self.residual2(x5)
         x  = self.decode1(x5,x4)
         x  = self.decode2(x,x3)
         x  = self.decode3(x,x2)

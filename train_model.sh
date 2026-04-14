@@ -1,0 +1,1 @@
+python3 python/model/train.py > ./out/logs/train_log.txt

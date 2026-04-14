@@ -1,0 +1,1 @@
+python3 python/test/test_inference.py > ./out/results/inference_test_results.txt
