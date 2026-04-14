@@ -383,8 +383,6 @@ std::vector<torch::Tensor> backward(torch::Tensor Q, torch::Tensor K, torch::Ten
     torch::Tensor dV = torch::zeros_like(V);
     torch::Tensor D = torch::sum(O * dO, -1);
 
-    D = torch::mul(O, dO);
-
     dim3 gridDim(Tc, numHeads, batchSize); // (Tr x numHeads x batchSize) blocks per grid
     dim3 blockDim(Br, Bc);                 // (Br x Bc) threads per block
     
