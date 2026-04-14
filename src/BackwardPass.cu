@@ -369,7 +369,8 @@ std::vector<torch::Tensor> backward(torch::Tensor Q, torch::Tensor K, torch::Ten
     // [Br]      : Li, Di
     const int sramSize = ((4 * Bc * d) + (4 * Br * d) + (4 * Br * Bc) + (2 * Br)) * sizeof(float);
     int maxSramSize;
-    cudaDeviceGetAttribute(&maxSramSize, cudaDevAttrMaxSharedMemoryPerBlock, 4);
+    int dev = Q.get_device();
+    cudaDeviceGetAttribute(&maxSramSize, cudaDevAttrMaxSharedMemoryPerBlock, dev);
     
     if (maxSramSize < sramSize)
     {
@@ -401,6 +402,12 @@ std::vector<torch::Tensor> backward(torch::Tensor Q, torch::Tensor K, torch::Ten
         N, d, Br, Bc, Tr, Tc,
         attentionScalar
     ); 
+
+    cudaError_t err = cudaGetLastError();
+    TORCH_CHECK(err == cudaSuccess, "backward kernel launch failed: ", cudaGetErrorString(err));
+
+    err = cudaDeviceSynchronize();
+    TORCH_CHECK(err == cudaSuccess, "backward kernel execution failed: ", cudaGetErrorString(err));
 
     return {dQ, dK, dV};
 }

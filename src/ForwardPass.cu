@@ -216,8 +216,9 @@ std::vector<torch::Tensor> forward(torch::Tensor Q, torch::Tensor K, torch::Tens
 
     const int sram_size = (Br * d + 2 * Bc * d + Br * Bc) * sizeof(float);
     int max_sram_size;
-    cudaDeviceGetAttribute(&max_sram_size, cudaDevAttrMaxSharedMemoryPerBlock, 4);
-    printf("Max shared memory: %d, requested shared memory: %d \\n", max_sram_size, sram_size);
+    int dev = Q.get_device();
+    cudaDeviceGetAttribute(&max_sram_size, cudaDevAttrMaxSharedMemoryPerBlock, dev);
+    // printf("Max shared memory: %d, requested shared memory: %d \\n", max_sram_size, sram_size);
 
     forwardKernel<<<gridDim, blockDim, sram_size>>>(Q.data_ptr<float>(), K.data_ptr<float>(), V.data_ptr<float>(), 
                                          output.data_ptr<float>(), logsumexp.data_ptr<float>(), 
