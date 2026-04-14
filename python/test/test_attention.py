@@ -4,7 +4,7 @@ import math
 
 flash_attn = load(name="flash_attn_ext", sources=['./src/main.cpp', './src/ForwardPass.cu', './src/BackwardPass.cu'], verbose=True)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:4" if torch.cuda.is_available() else "cpu")
 
 def dot_product_attention(q, k, v):
     # q, k, v: [B, H, N, D]
