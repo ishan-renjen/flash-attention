@@ -402,8 +402,7 @@ std::vector<torch::Tensor> backward(torch::Tensor Q, torch::Tensor K, torch::Ten
         dV.data_ptr<float>(),
         N, d, Br, Bc, Tr, Tc,
         attentionScalar
-    ) 
+    ); 
 
     return {dQ, dK, dV};
-
 }

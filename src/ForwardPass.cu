@@ -49,34 +49,36 @@ __global__ void forwardKernel(const float* Q, const float* K, const float* V, //
 
     float* sQ = sram;
     float* sK = sQ + Br * d; //store above sQ
-    float* sV = sK + Bc * d //store above sV
+    float* sV = sK + Bc * d; //store above sV
     float* sS = sV + Bc * d;
 
-    float max = -INFINITY;
-    float scale_denom = 0.0f;
+    float m = -INFINITY;
+    float l = 0.0f;
 
     //initialize accumulator to 0 to not hit weird issues if accum < d
-    float accumulator[MAX_D];
+    float o_accum[MAX_D];
     for(int i = 0; i < d; i++){
-        accumulator[i] = 0.0f;
+        o_accum[i] = 0.0f;
     }
 
     //iterating through Qi tile
-    for(int i = tx; i < Br * d; i+=blockDim.x){
-        int local_col = i % d;
-        int global_row = i * Br + (i / d);
+    int q_tile_base = blockIdx.z * Br;
 
-        //check for max
-        if(global_row < N){
-            sQ[i + local_col] = Q[((b * gridDim.y + h) * N + global_row) * d + local_col];
-        }
-        else{
+    for (int idx = tx; idx < Br * d; idx += blockDim.x) {
+        int local_row = idx / d;
+        int local_col = idx % d;
+        int global_row = q_tile_base + local_row;
+
+        if (global_row < N) {
+            sQ[local_row * d + local_col] =
+                Q[((b * gridDim.y + h) * N + global_row) * d + local_col];
+        } else {
             sQ[local_row * d + local_col] = 0.0f;
         }
     }
     __syncthreads();
 
-    bool valid q_row = (q_row < N);
+    bool valid_q_row = (q_row < N);
 
     //iterate over columns - K/V
     for (int j = 0; j < Tc; ++j) {
