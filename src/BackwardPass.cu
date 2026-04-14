@@ -369,7 +369,7 @@ std::vector<torch::Tensor> backward(torch::Tensor Q, torch::Tensor K, torch::Ten
     // [Br]      : Li, Di
     const int sramSize = ((4 * Bc * d) + (4 * Br * d) + (4 * Br * Bc) + (2 * Br)) * sizeof(float);
     int maxSramSize;
-    cudaDeviceGetAttribute(&maxSramSize, cudaDevAttrMaxSharedMemoryPerBlock, 0);
+    cudaDeviceGetAttribute(&maxSramSize, cudaDevAttrMaxSharedMemoryPerBlock, 4);
     
     if (maxSramSize < sramSize)
     {
