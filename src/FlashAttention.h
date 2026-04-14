@@ -21,8 +21,14 @@ std::vector<torch::Tensor> forward(torch::Tensor Q, torch::Tensor K, torch::Tens
 /*
     Computes the backward pass for our Flash Attention implementation.
     inputs:
+        torch::Tensor Q, K, V, O, dO, L
+            - dimensions must be [Batch Size, Num. Heads, Sequence Length, Head Dimension]
 
     outputs:
+        std::vector<torch::Tensor>
+            torch::Tensor dQ, dK, dV
+                - dimensions must be [Batch Size, Num. Heads, Sequence Length, Head Dimension]
     
 */
-torch::Tensor backward(torch::Tensor input);
+std::vector<torch::Tensor> backward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, 
+                                    torch::Tensor O, torch::Tensor dO, torch::Tensor L);
