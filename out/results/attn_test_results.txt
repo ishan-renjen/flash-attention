@@ -1,0 +1,7 @@
+[1/2] /usr/local/cuda/bin/nvcc -MD -MF ForwardPass.cuda.o.d -DTORCH_EXTENSION_NAME=flash_attn_ext -DTORCH_API_INCLUDE_EXTENSION_H -isystem /home/inr8842/flash-attention/.venv/lib/python3.13/site-packages/torch/include -isystem /home/inr8842/flash-attention/.venv/lib/python3.13/site-packages/torch/include/torch/csrc/api/include -isystem /usr/local/cuda/include -isystem /home/inr8842/miniconda3/include/python3.13 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_86,code=compute_86 -gencode=arch=compute_86,code=sm_86 --compiler-options '-fPIC' -std=c++17 -c /home/inr8842/flash-attention/src/ForwardPass.cu -o ForwardPass.cuda.o 
+[2/2] c++ main.o ForwardPass.cuda.o BackwardPass.cuda.o -shared -L/home/inr8842/flash-attention/.venv/lib/python3.13/site-packages/torch/lib -lc10 -lc10_cuda -ltorch_cpu -ltorch_cuda -ltorch -ltorch_python -L/usr/local/cuda/lib64 -lcudart -o flash_attn_ext.so
+output correct?: True
+logsumexp correct?: True
+max abs diff output: 4.172325134277344e-07
+max abs diff logsumexp: 9.5367431640625e-07
+Max shared memory: 49152, requested shared memory: 13312 \n
