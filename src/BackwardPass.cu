@@ -9,10 +9,10 @@
 
 #include "FlashAttention.h"
 
-__global__ void backwardKernel(const float* Q, const float* K, const float* V,   //Query, Key, Value
-                                const float* O, const float* dO,                 //output, output gradient
-                                const float* L, const float* D,                  // logsumexp, normalization terms
-                                float* dQ, float* dK, float* dV,                 // Query, Key, Value gradients
+__global__ void backwardKernel(const float* __restrict__ Q, const float* __restrict__ K, const float* __restrict__ V,   //Query, Key, Value
+                                const float* __restrict__ O, const float* __restrict__ dO,                 //output, output gradient
+                                const float* __restrict__ L, const float* __restrict__ D,                  // logsumexp, normalization terms
+                                float* __restrict__ dQ, float* __restrict__ dK, float* __restrict__ dV,                 // Query, Key, Value gradients
                                 const unsigned int N, const unsigned int d,      //dimensions of QKV matrices [N, d]
                                 const unsigned int Br, const unsigned int Bc,    //block sizes [Br, Bc]
                                 const unsigned int Tr, const unsigned int Tc,    //number of blocks per row and column
@@ -61,6 +61,7 @@ __global__ void backwardKernel(const float* Q, const float* K, const float* V,  
     {
         if (col_base + r < N) 
         {
+            #pragma unroll
             for (int x = 0; x < d; x++) 
             {
                 Kj[r * d + x] = K[col_offset_qkv + r * d + x];
@@ -69,6 +70,7 @@ __global__ void backwardKernel(const float* Q, const float* K, const float* V,  
         }
         else 
         {
+            #pragma unroll
             for (int x = 0; x < d; x++) 
             {
                 Kj[r * d + x] = 0.0f;
@@ -79,6 +81,7 @@ __global__ void backwardKernel(const float* Q, const float* K, const float* V,  
 
     if (r < Bc && c == 0) 
     {
+        #pragma unroll
         for (int x = 0; x < d; x++) 
         {
             dKj[r * d + x] = 0.0f;
@@ -89,6 +92,7 @@ __global__ void backwardKernel(const float* Q, const float* K, const float* V,  
     __syncthreads();
 
     // Loop over row tiles
+    #pragma unroll
     for (int i = 0; i < Tr; i++)
     {
         int row_base = i * Br;
@@ -110,6 +114,7 @@ __global__ void backwardKernel(const float* Q, const float* K, const float* V,  
         {
             if (global_row < N) 
             {
+                #pragma unroll
                 for (int x = 0; x < d; x++) 
                 {
                     Qi[r * d + x]  = Q[row_offset_qkv + r * d + x];
@@ -124,6 +129,7 @@ __global__ void backwardKernel(const float* Q, const float* K, const float* V,  
             }
             else 
             {
+                #pragma unroll
                 for (int x = 0; x < d; x++) 
                 {
                     Qi[r * d + x]  = 0.0f;
@@ -145,6 +151,7 @@ __global__ void backwardKernel(const float* Q, const float* K, const float* V,  
             if (global_row < N && global_col < N) 
             {
                 float sum = 0.0f;
+                #pragma unroll
                 for (int x = 0; x < d; x++) 
                 {
                     sum += Qi[r * d + x] * Kj[c * d + x];
@@ -180,9 +187,11 @@ __global__ void backwardKernel(const float* Q, const float* K, const float* V,  
         {
             if (col_base + r < N) 
             {
+                #pragma unroll
                 for (int x = 0; x < d; x++) 
                 {
                     float sum = 0.0f;
+                    #pragma unroll
                     for (int rr = 0; rr < Br; rr++) 
                     {
                         int g_row = row_base + rr;
@@ -203,6 +212,7 @@ __global__ void backwardKernel(const float* Q, const float* K, const float* V,  
             if (global_row < N && global_col < N)
             {
                 float sum = 0.0f;
+                #pragma unroll
                 for (int x = 0; x < d; x++)
                 {
                     sum += dOi[r * d + x] * Vj[c * d + x];
@@ -235,9 +245,11 @@ __global__ void backwardKernel(const float* Q, const float* K, const float* V,  
         // dQi = dQi + dSij * Kj
         if (r < Br && c == 0) 
         {
+            #pragma unroll
             for (int x = 0; x < d; x++) 
             {
                 float sum = 0.0f;
+                #pragma unroll
                 for (int cc = 0; cc < Bc; cc++) 
                 {
                     int g_col = col_base + cc;
@@ -258,6 +270,7 @@ __global__ void backwardKernel(const float* Q, const float* K, const float* V,  
         {
             if (global_row < N) 
             {
+                #pragma unroll
                 for (int x = 0; x < d; x++) 
                 {
                     atomicAdd(&dQ[row_offset_qkv + r * d + x], dQi[r * d + x]);
@@ -270,9 +283,11 @@ __global__ void backwardKernel(const float* Q, const float* K, const float* V,  
         {
             if (col_base + r < N) 
             {
+                #pragma unroll
                 for (int x = 0; x < d; x++) 
                 {
                     float sum = 0.0f;
+                    #pragma unroll
                     for (int rr = 0; rr < Br; rr++) 
                     {
                         int g_row = row_base + rr;
@@ -297,6 +312,7 @@ __global__ void backwardKernel(const float* Q, const float* K, const float* V,  
     {
         if (col_base + r < N) 
         {
+            #pragma unroll
             for (int x = 0; x < d; x++) 
             {
                 dK[col_offset_qkv + r * d + x] = dKj[r * d + x];

@@ -1,6 +1,7 @@
 from torch.utils.cpp_extension import load
 import torch
 import math
+from torch.profiler import profile, ProfilerActivity, record_function
 
 flash_attn = load(
     name="flash_attn_ext",
@@ -9,6 +10,7 @@ flash_attn = load(
 )
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device_cpu = torch.device("cpu")
 torch.manual_seed(0)
 
 # --------------------------------------------------
@@ -23,50 +25,6 @@ def dot_product_attention(q, k, v):
 
 
 # --------------------------------------------------
-# FLOP estimates (approximate)
-# --------------------------------------------------
-def attention_forward_flops(B, H, N, D, include_softmax=True):
-    # QK^T: 2 * B * H * N * N * D
-    # P@V : 2 * B * H * N * N * D
-    flops = 4 * H * N * N * D
-    # if include_softmax:
-    #     flops += 5 * B * H * N * N   # rough softmax estimate
-    return flops
-
-def attention_backward_flops(B, H, N, D, include_softmax=True):
-    # dV = P^T @ dO         -> 2 * B * H * N * N * D
-    # dP = dO @ V^T         -> 2 * B * H * N * N * D
-    # dQ = dS @ K           -> 2 * B * H * N * N * D
-    # dK = dS^T @ Q         -> 2 * B * H * N * N * D
-    flops = 2.5 * (4 * H * N * N * D)
-    # if include_softmax:
-    #     flops += 5 * B * H * N * N   # rough softmax backward estimate
-    return flops
-
-
-# --------------------------------------------------
-# Timing helper
-# --------------------------------------------------
-def benchmark_cuda(fn, warmup=20, iters=100):
-    for _ in range(warmup):
-        fn()
-    torch.cuda.synchronize()
-
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-
-    start.record()
-    for _ in range(iters):
-        fn()
-    end.record()
-    torch.cuda.synchronize()
-
-    total_ms = start.elapsed_time(end)
-    avg_ms = total_ms / iters
-    return avg_ms
-
-
-# --------------------------------------------------
 # Shapes
 # --------------------------------------------------
 B, H, N, D = 32, 16, 1024, 64
@@ -75,23 +33,24 @@ Q = torch.rand(B, H, N, D, device=device, dtype=torch.float32).contiguous()
 K = torch.rand(B, H, N, D, device=device, dtype=torch.float32).contiguous()
 V = torch.rand(B, H, N, D, device=device, dtype=torch.float32).contiguous()
 
+Q_cpu = torch.rand(B, H, N, D, device=device_cpu, dtype=torch.float32).contiguous()
+K_cpu = torch.rand(B, H, N, D, device=device_cpu, dtype=torch.float32).contiguous()
+V_cpu = torch.rand(B, H, N, D, device=device_cpu, dtype=torch.float32).contiguous()
+
 # --------------------------------------------------
 # Forward correctness
 # --------------------------------------------------
 output, logsumexp = flash_attn.flashattention_forward(Q, K, V)
 output_ref, logsumexp_ref = dot_product_attention(Q, K, V)
 
+
 print("FORWARD CORRECTNESS")
 print("output allclose:", torch.allclose(output, output_ref, atol=1e-4, rtol=1e-4))
 print("logsumexp allclose:", torch.allclose(logsumexp, logsumexp_ref, atol=1e-4, rtol=1e-4))
 print("max abs diff output:", (output - output_ref).abs().max().item())
 print("max abs diff logsumexp:", (logsumexp - logsumexp_ref).abs().max().item())
-print("Q shape:", Q.shape, Q.dtype, Q.is_contiguous())
-print("K shape:", K.shape, K.dtype, K.is_contiguous())
-print("V shape:", V.shape, V.dtype, V.is_contiguous())
-print("O shape:", output.shape, output.dtype, output.is_contiguous())
-print("L shape:", logsumexp.shape, logsumexp.dtype, logsumexp.is_contiguous())
 print()
+
 
 # --------------------------------------------------
 # Backward correctness
@@ -100,8 +59,15 @@ Q_ref = Q.clone().detach().requires_grad_(True)
 K_ref = K.clone().detach().requires_grad_(True)
 V_ref = V.clone().detach().requires_grad_(True)
 
+Qcpu_ref = Q_cpu.clone().detach().requires_grad_(True)
+Kcpu_ref = K_cpu.clone().detach().requires_grad_(True)
+Vcpu_ref = V_cpu.clone().detach().requires_grad_(True)
+
 out_ref, lse_ref = dot_product_attention(Q_ref, K_ref, V_ref)
 grad_out = torch.randn_like(out_ref)
+
+outcpu_ref, lsecpu_ref = dot_product_attention(Qcpu_ref, Kcpu_ref, Vcpu_ref)
+grad_out_cpu = torch.randn_like(outcpu_ref)
 
 loss_ref = (out_ref * grad_out).sum()
 loss_ref.backward()
@@ -110,7 +76,6 @@ dQ_ref = Q_ref.grad.detach()
 dK_ref = K_ref.grad.detach()
 dV_ref = V_ref.grad.detach()
 
-# print("grad_out shape:", grad_out.shape)
 dQ, dK, dV = flash_attn.flashattention_backward(Q, K, V, output, grad_out, logsumexp)
 
 print("BACKWARD CORRECTNESS")
@@ -122,8 +87,35 @@ print("max abs diff dK:", (dK - dK_ref).abs().max().item())
 print("max abs diff dV:", (dV - dV_ref).abs().max().item())
 print()
 
+
 # --------------------------------------------------
-# Forward timing
+# Helpers
+# --------------------------------------------------
+def cuda_sync():
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+def profiler_activities():
+    acts = [ProfilerActivity.CPU]
+    if torch.cuda.is_available():
+        acts.append(ProfilerActivity.CUDA)
+    return acts
+
+def warmup(fn, iters=10):
+    for _ in range(iters):
+        fn()
+    cuda_sync()
+
+def print_prof_summary(prof, label, row_limit=25):
+    sort_key = "self_cuda_time_total" if torch.cuda.is_available() else "self_cpu_time_total"
+    print(f"\n{'=' * 100}")
+    print(label)
+    print(f"{'=' * 100}")
+    print(prof.key_averages().table(sort_by=sort_key, row_limit=row_limit))
+
+
+# --------------------------------------------------
+# Workloads
 # --------------------------------------------------
 def run_ref_forward():
     out, lse = dot_product_attention(Q, K, V)
@@ -133,57 +125,99 @@ def run_flash_forward():
     out, lse = flash_attn.flashattention_forward(Q, K, V)
     return out, lse
 
-ref_fwd_ms = benchmark_cuda(run_ref_forward, warmup=20, iters=100)
-flash_fwd_ms = benchmark_cuda(run_flash_forward, warmup=20, iters=100)
+def run_cpu_forward():
+    output_cpu, logsumexp_cpu = dot_product_attention(Q_cpu, K_cpu, V_cpu)
+    return output_cpu, logsumexp_cpu
 
-print("FORWARD TIMING")
-print(f"reference forward: {ref_fwd_ms:.4f} ms")
-print(f"flash forward:     {flash_fwd_ms:.4f} ms")
-print(f"forward speedup:   {ref_fwd_ms / flash_fwd_ms:.3f}x")
-print()
-
-# --------------------------------------------------
-# Backward timing
-# --------------------------------------------------
 def run_ref_backward():
     q = Q.clone().detach().requires_grad_(True)
     k = K.clone().detach().requires_grad_(True)
     v = V.clone().detach().requires_grad_(True)
 
     out, _ = dot_product_attention(q, k, v)
-    loss = (out * grad_out).sum()
-    loss.backward()
+
+    dQ_ref, dK_ref, dV_ref = torch.autograd.grad(
+        outputs=out,
+        inputs=(q, k, v),
+        grad_outputs=grad_out,
+        retain_graph=False, create_graph=False, allow_unused=False)
+    return dQ_ref, dK_ref, dV_ref
 
 def run_flash_backward():
     out, lse = flash_attn.flashattention_forward(Q, K, V)
-
-    # Adjust to your actual API
     dQ, dK, dV = flash_attn.flashattention_backward(Q, K, V, out, grad_out, lse)
     return dQ, dK, dV
 
-ref_bwd_ms = benchmark_cuda(run_ref_backward, warmup=20, iters=100)
-flash_bwd_ms = benchmark_cuda(run_flash_backward, warmup=20, iters=100)
+def run_cpu_backward():
+    q = Q_cpu.clone().detach().requires_grad_(True)
+    k = K_cpu.clone().detach().requires_grad_(True)
+    v = V_cpu.clone().detach().requires_grad_(True)
 
-print("BACKWARD TIMING")
-print(f"reference backward: {ref_bwd_ms:.4f} ms")
-print(f"flash backward:     {flash_bwd_ms:.4f} ms")
-print(f"backward speedup:   {ref_bwd_ms / flash_bwd_ms:.3f}x")
-print()
+    out_cpu, _ = dot_product_attention(q, k, v)
+
+    dQ_ref, dK_ref, dV_ref = torch.autograd.grad(
+        outputs=out_cpu,
+        inputs=(q, k, v),
+        grad_outputs=grad_out_cpu,
+        retain_graph=False, create_graph=False, allow_unused=False)
+    return dQ_ref, dK_ref, dV_ref
 
 # --------------------------------------------------
-# Approximate throughput
+# Profile simple repeated regions
 # --------------------------------------------------
-fwd_flops = attention_forward_flops(B, H, N, D)
-bwd_flops = attention_backward_flops(B, H, N, D)
+def profile_region(label, fn, warmup_iters=10, active_iters=20, row_limit=25, trace_file=None):
+    warmup(fn, warmup_iters)
 
-flash_fwd_tflops = fwd_flops / (flash_fwd_ms * 1e-3) / 1e12
-ref_fwd_tflops = fwd_flops / (ref_fwd_ms * 1e-3) / 1e12
+    with profile(activities=profiler_activities(), record_shapes=True, profile_memory=True, with_stack=False) as prof:
+        for _ in range(active_iters):
+            with record_function(label):
+                fn()
 
-flash_bwd_tflops = bwd_flops / (flash_bwd_ms * 1e-3) / 1e12
-ref_bwd_tflops = bwd_flops / (ref_bwd_ms * 1e-3) / 1e12
+    cuda_sync()
+    print_prof_summary(prof, f"{label} ({active_iters} iterations)", row_limit=row_limit)
 
-print("APPROXIMATE THROUGHPUT")
-print(f"reference forward TFLOP/s: {ref_fwd_tflops:.4f}")
-print(f"flash forward TFLOP/s:     {flash_fwd_tflops:.4f}")
-print(f"reference backward TFLOP/s:{ref_bwd_tflops:.4f}")
-print(f"flash backward TFLOP/s:    {flash_bwd_tflops:.4f}")
+    if trace_file is not None:
+        prof.export_chrome_trace(trace_file)
+        print(f"chrome trace saved to: {trace_file}")
+
+    return prof
+
+
+# --------------------------------------------------
+# Run profiler
+# --------------------------------------------------
+prof_ref_fwd = profile_region(label="reference_forward", fn=run_ref_forward, warmup_iters=10, active_iters=20, row_limit=20, trace_file="reference_forward_trace.json")
+prof_ref_fwd = profile_region(label="cpu_forward", fn=run_cpu_forward, warmup_iters=10, active_iters=20, row_limit=20, trace_file="cpu_forward_trace.json")
+
+prof_flash_fwd = profile_region(
+    label="flash_forward",
+    fn=run_flash_forward,
+    warmup_iters=10,
+    active_iters=20,
+    row_limit=20,
+    trace_file="flash_forward_trace.json")
+
+prof_ref_bwd = profile_region(
+    label="reference_backward",
+    fn=run_ref_backward,
+    warmup_iters=10,
+    active_iters=20,
+    row_limit=20,
+    trace_file="reference_backward_trace.json")
+
+prof_ref_bwd = profile_region(
+    label="cpu_backward",
+    fn=run_cpu_backward,
+    warmup_iters=10,
+    active_iters=20,
+    row_limit=20,
+    trace_file="cpu_backward_trace.json")
+
+
+prof_flash_bwd = profile_region(
+    label="flash_manual_backward",
+    fn=run_flash_backward,
+    warmup_iters=10,
+    active_iters=20,
+    row_limit=20,
+    trace_file="flash_manual_backward_trace.json")
