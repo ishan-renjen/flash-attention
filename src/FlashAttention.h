@@ -16,7 +16,7 @@
         torch::Tensor logsumexp
             -logsum exponential numerical calculation to be used in backwards pass
     */
-std::vector<torch::Tensor> forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V);
+void forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O, torch::Tensor LSE);
 
 /*
     Computes the backward pass for our Flash Attention implementation.
@@ -30,8 +30,10 @@ std::vector<torch::Tensor> forward(torch::Tensor Q, torch::Tensor K, torch::Tens
                 - dimensions must be [Batch Size, Num. Heads, Sequence Length, Head Dimension]
     
 */
-std::vector<torch::Tensor> backward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, 
-                                    torch::Tensor O, torch::Tensor dO, torch::Tensor L);
+void backward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, 
+                                    torch::Tensor O, torch::Tensor dO, torch::Tensor L, 
+                                    torch::Tensor dQ, torch::Tensor dK, torch::Tensor dV, 
+                                    torch::Tensor D);
 
 /*
     Computes the forward pass for our Flash Attention implementation on CPU as a baseline.
@@ -45,7 +47,7 @@ std::vector<torch::Tensor> backward(torch::Tensor Q, torch::Tensor K, torch::Ten
         torch::Tensor logsumexp
             -logsum exponential numerical calculation to be used in backwards pass
     */
-std::vector<torch::Tensor> forwardCPU(torch::Tensor Q, torch::Tensor K, torch::Tensor V);
+void forwardCPU(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O, torch::Tensor LSE);
 
 /*
     Computes the backward pass for our Flash Attention implementation on CPU as a baseline.
@@ -59,5 +61,7 @@ std::vector<torch::Tensor> forwardCPU(torch::Tensor Q, torch::Tensor K, torch::T
                 - dimensions must be [Batch Size, Num. Heads, Sequence Length, Head Dimension]
     
 */
-std::vector<torch::Tensor> backwardCPU(torch::Tensor Q, torch::Tensor K, torch::Tensor V, 
-    torch::Tensor O, torch::Tensor dO, torch::Tensor L);
+void backwardCPU(torch::Tensor Q, torch::Tensor K, torch::Tensor V, 
+                                       torch::Tensor O, torch::Tensor dO, torch::Tensor L, 
+                                       torch::Tensor dQ, torch::Tensor dK, torch::Tensor dV, 
+                                       torch::Tensor D);

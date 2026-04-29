@@ -7,9 +7,7 @@
 
 #include "FlashAttention.h"
 
-std::vector<torch::Tensor> forwardCPU(torch::Tensor Q, 
-                                      torch::Tensor K, 
-                                      torch::Tensor V){
+void forwardCPU(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O, torch::Tensor LSE){
     TORCH_CHECK(Q.device().is_cpu(), "Q must be on CPU");
     TORCH_CHECK(K.device().is_cpu(), "K must be on CPU");
     TORCH_CHECK(V.device().is_cpu(), "V must be on CPU");
@@ -39,9 +37,6 @@ std::vector<torch::Tensor> forwardCPU(torch::Tensor Q,
     const int Tr = (n + Br - 1) / Br;
     const int Tc = (n + Bc - 1) / Bc;
     const float scale = 1.0f / std::sqrt(static_cast<float>(d));
-
-    torch::Tensor O = torch::empty_like(Q);
-    torch::Tensor LSE = torch::empty({batch_dim, head_dim, n}, Q.options().dtype(torch::kFloat32));
 
     /*loops to calculate out and LSE*/
     for(int batch=0; batch<batch_dim; batch++){
@@ -100,6 +95,4 @@ std::vector<torch::Tensor> forwardCPU(torch::Tensor Q,
             }
         }
     }
-
-    return {O, LSE};
 }

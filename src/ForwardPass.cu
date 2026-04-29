@@ -11,10 +11,11 @@
 
 #include <torch/types.h>
 #include <torch/extension.h>
+#include <c10/cuda/CUDAException.h>
 
 #define D 64
 
-__global__ void forwardKernelSimple(const float* __restrict__ Q, const float* __restrict__ K, const float* __restrict__ V, 
+__global__ void forwardKernel(const float* __restrict__ Q, const float* __restrict__ K, const float* __restrict__ V, 
                                     float* __restrict__ O, float* __restrict__ LSE, 
                                     const int N, const int Tc, const float scale,
                                     int Br, int Bc) {
@@ -148,7 +149,7 @@ __global__ void forwardKernelSimple(const float* __restrict__ Q, const float* __
     }
 }
 
-std::vector<torch::Tensor> forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
+void forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O, torch::Tensor LSE) {
     TORCH_CHECK(Q.is_cuda(), "Q must be CUDA");
     TORCH_CHECK(K.is_cuda(), "K must be CUDA");
     TORCH_CHECK(V.is_cuda(), "V must be CUDA");
@@ -175,14 +176,11 @@ std::vector<torch::Tensor> forward(torch::Tensor Q, torch::Tensor K, torch::Tens
     const int Tc = (N + Bc - 1) / Bc;
     const float scale = 1.0f / std::sqrt(static_cast<float>(d));
 
-    auto O = torch::empty_like(Q);
-    auto LSE = torch::empty({B, H, N}, Q.options().dtype(torch::kFloat32));
-
     dim3 grid(B, H, Tr);
     dim3 block(Br);
 
     const size_t smem = (Br * 64 + 2 * Bc * 64 + Br * Bc) * sizeof(float);
-    forwardKernelSimple<<<grid, block, smem>>>(
+    forwardKernel<<<grid, block, smem>>>(
         Q.data_ptr<float>(),
         K.data_ptr<float>(),
         V.data_ptr<float>(),
@@ -194,5 +192,5 @@ std::vector<torch::Tensor> forward(torch::Tensor Q, torch::Tensor K, torch::Tens
         Br,
         Bc);
 
-    return {O, LSE};
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
 }

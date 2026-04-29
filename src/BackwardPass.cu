@@ -6,6 +6,7 @@
 
 #include <torch/types.h>
 #include <torch/extension.h>
+#include <c10/cuda/CUDAException.h>
 
 #include "FlashAttention.h"
 
@@ -303,8 +304,10 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
 
 }
 
-std::vector<torch::Tensor> backward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, 
-                                    torch::Tensor O, torch::Tensor dO, torch::Tensor L)
+void backward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, 
+                                    torch::Tensor O, torch::Tensor dO, torch::Tensor L, 
+                                    torch::Tensor dQ, torch::Tensor dK, torch::Tensor dV, 
+                                    torch::Tensor D)
 {
     //must be on GPU to use
     TORCH_CHECK(Q.is_cuda(), "Q must be CUDA");
@@ -354,7 +357,7 @@ std::vector<torch::Tensor> backward(torch::Tensor Q, torch::Tensor K, torch::Ten
     const int Bc = 16;
     const int Br = 16;
 
-    const int Tr = std::ceil((float)N/Br);  // Divide Q, dQ, D into Tr blocks
+    const int Tr = std::ceil((float)N/Br);  // Divide Q, dQ, D into N/Br blocks
     const int Tc = std::ceil((float)N/Bc);  // Divide K, V, dK, dV into N/Bc blocks
 
     const float attentionScalar = 1.0f/std::sqrt((float)d);
@@ -376,12 +379,7 @@ std::vector<torch::Tensor> backward(torch::Tensor Q, torch::Tensor K, torch::Ten
 
     auto opts = torch::TensorOptions().dtype(Q.dtype()).device(Q.device());
 
-    torch::Tensor dQ = torch::zeros_like(Q);
-    torch::Tensor dK = torch::zeros_like(K);
-    torch::Tensor dV = torch::zeros_like(V);
-    torch::Tensor D = torch::sum(O * dO, -1);
-
-    dim3 gridDim(Tc, numHeads, batchSize); // (Tr x numHeads x batchSize) blocks per grid
+    dim3 gridDim(Tc, numHeads, batchSize); // (Tc x numHeads x batchSize) blocks per grid
     dim3 blockDim(Br, Bc);                 // (Br x Bc) threads per block
     
     // Launch kernel
@@ -400,5 +398,5 @@ std::vector<torch::Tensor> backward(torch::Tensor Q, torch::Tensor K, torch::Ten
         attentionScalar
     ); 
 
-    return {dQ, dK, dV};
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
 }

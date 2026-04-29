@@ -6,8 +6,10 @@
 
 #include "FlashAttention.h"
 
-
-std::vector<torch::Tensor> backwardCPU(torch::Tensor Q, torch::Tensor K, torch::Tensor V,  torch::Tensor O, torch::Tensor dO, torch::Tensor L){
+void backwardCPU(torch::Tensor Q, torch::Tensor K, torch::Tensor V, 
+                                       torch::Tensor O, torch::Tensor dO, torch::Tensor L, 
+                                       torch::Tensor dQ, torch::Tensor dK, torch::Tensor dV, 
+                                       torch::Tensor D){
     //must be on GPU to use
     TORCH_CHECK(Q.is_cpu(), "Q must be CPU");
     TORCH_CHECK(K.is_cpu(), "K must be CPU");
@@ -62,11 +64,6 @@ std::vector<torch::Tensor> backwardCPU(torch::Tensor Q, torch::Tensor K, torch::
 
     const int Tr = std::ceil((float)n/Br);  // Divide Q, dQ, D into Tr blocks
     const int Tc = std::ceil((float)n/Bc);  // Divide K, V, dK, dV into N/Bc blocks
-
-    torch::Tensor dQ = torch::zeros_like(Q);
-    torch::Tensor dK = torch::zeros_like(K);
-    torch::Tensor dV = torch::zeros_like(V);
-    torch::Tensor D = (dO * O).sum(-1);
 
     const float scale = 1.0f/std::sqrt((float)d);
 
@@ -136,6 +133,4 @@ std::vector<torch::Tensor> backwardCPU(torch::Tensor Q, torch::Tensor K, torch::
             }
         }
     }
-
-    return {dQ, dK, dV};
 }

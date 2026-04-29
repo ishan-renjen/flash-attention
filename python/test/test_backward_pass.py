@@ -1,298 +1,159 @@
 from torch.utils.cpp_extension import load
 import torch
 import math
-from torch.profiler import profile, ProfilerActivity, record_function
+import time
 import sys
 
-flash_attn = load(
-    name="flash_attn_ext",
-    sources=['./src/main.cpp', 
-             './src/ForwardPass.cu', 
-             './src/BackwardPass.cu',
-             './src/ForwardPassCPU.cpp',
-             './src/BackwardPassCPU.cpp'],
-    verbose=True)
+flash_attn = load(name="flash_attn_ext", 
+                  sources=["./src/main.cpp", 
+                           "./src/ForwardPass.cu", "./src/BackwardPass.cu", 
+                           "./src/ForwardPassCPU.cpp", "./src/BackwardPassCPU.cpp"], 
+                           verbose=True)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device_cpu = torch.device("cpu")
-torch.manual_seed(0)
-
-# --------------------------------------------------
-# Reference attention: q, k, v have shape [B, H, N, D]
-# --------------------------------------------------
 def dot_product_attention(q, k, v):
-    scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(q.size(-1))   # [B,H,N,N]
+    scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(q.size(-1))
     probs = torch.softmax(scores, dim=-1)
-    output = torch.matmul(probs, v)                                          # [B,H,N,D]
-    logsumexp = torch.logsumexp(scores, dim=-1)                              # [B,H,N]
+    output = torch.matmul(probs, v)
+    logsumexp = torch.logsumexp(scores, dim=-1)
     return output, logsumexp
 
-def main():
-    # --------------------------------------------------
-    # Shapes
-    # --------------------------------------------------
-    B = int(sys.argv[1])
-    H = int(sys.argv[2])
-    N = int(sys.argv[3])
-    D = int(sys.argv[4])
+def time_fn(fn, use_cuda, warmup_iters=3, active_iters=10):
+    for _ in range(warmup_iters):
+        fn()
 
-    Q = torch.rand(B, H, N, D, device=device, dtype=torch.float32).contiguous()
-    K = torch.rand(B, H, N, D, device=device, dtype=torch.float32).contiguous()
-    V = torch.rand(B, H, N, D, device=device, dtype=torch.float32).contiguous()
+    if use_cuda:
+        torch.cuda.synchronize()
 
-    Q_cpu = torch.rand(B, H, N, D, device=device_cpu, dtype=torch.float32).contiguous()
-    K_cpu = torch.rand(B, H, N, D, device=device_cpu, dtype=torch.float32).contiguous()
-    V_cpu = torch.rand(B, H, N, D, device=device_cpu, dtype=torch.float32).contiguous()
+    start = time.perf_counter()
+    for _ in range(active_iters):
+        fn()
 
-    # --------------------------------------------------
-    # Forward correctness
-    # --------------------------------------------------
-    output, logsumexp = flash_attn.flashattention_forward(Q, K, V)
-    output_ref, logsumexp_ref = dot_product_attention(Q, K, V)
+    if use_cuda:
+        torch.cuda.synchronize()
 
-    output_cpu, logsumexp_cpu = flash_attn.flashattention_forward_cpu(Q_cpu, K_cpu, V_cpu)
-    output_cpu_ref, logsumexp_cpu_ref = dot_product_attention(Q_cpu, K_cpu, V_cpu)
+    end = time.perf_counter()
+    return ((end - start) * 1000.0) / active_iters
 
-    print("FORWARD GPU CORRECTNESS")
-    print("output allclose:", torch.allclose(output, output_ref, atol=1e-4, rtol=1e-4))
-    print("logsumexp allclose:", torch.allclose(logsumexp, logsumexp_ref, atol=1e-4, rtol=1e-4))
-    print("max abs diff output:", (output - output_ref).abs().max().item())
-    print("max abs diff logsumexp:", (logsumexp - logsumexp_ref).abs().max().item())
-
-    print("FORWARD CPU CORRECTNESS")
-    print("output allclose:", torch.allclose(output_cpu, output_cpu_ref, atol=1e-4, rtol=1e-4))
-    print("logsumexp allclose:", torch.allclose(logsumexp_cpu, logsumexp_cpu_ref, atol=1e-4, rtol=1e-4))
-    print("max abs diff output:", (output_cpu - output_cpu_ref).abs().max().item())
-    print("max abs diff logsumexp:", (logsumexp_cpu - logsumexp_cpu_ref).abs().max().item())
-    # --------------------------------------------------
-    # Backward correctness
-    # --------------------------------------------------
-    Q_ref = Q.clone().detach().requires_grad_(True)
-    K_ref = K.clone().detach().requires_grad_(True)
-    V_ref = V.clone().detach().requires_grad_(True)
-
-    # CPU reference backward
-    Qcpu_ref = Q_cpu.clone().detach().requires_grad_(True)
-    Kcpu_ref = K_cpu.clone().detach().requires_grad_(True)
-    Vcpu_ref = V_cpu.clone().detach().requires_grad_(True)
-
-    outcpu_ref, lsecpu_ref = dot_product_attention(Qcpu_ref, Kcpu_ref, Vcpu_ref)
-    grad_out_cpu = torch.randn_like(outcpu_ref)
-
-    loss_cpu_ref = (outcpu_ref * grad_out_cpu).sum()
-    loss_cpu_ref.backward()
-
-    dQcpu_ref = Qcpu_ref.grad.detach().clone()
-    dKcpu_ref = Kcpu_ref.grad.detach().clone()
-    dVcpu_ref = Vcpu_ref.grad.detach().clone()
-
-    # Manual CPU backward
-    outcpu, lsecpu = flash_attn.flashattention_forward_cpu(Q_cpu, K_cpu, V_cpu)
-
-    dQ_cpu, dK_cpu, dV_cpu = flash_attn.flashattention_backward_cpu(
-        Q_cpu,
-        K_cpu,
-        V_cpu,
-        outcpu,
-        grad_out_cpu.detach(),
-        lsecpu
-    )
-
-    out_ref, lse_ref = dot_product_attention(Q_ref, K_ref, V_ref)
-    grad_out = torch.randn_like(out_ref)
-
-    grad_cpu_fa = torch.randn_like(outcpu)
-
-    loss_ref = (out_ref * grad_out).sum()
-    loss_ref.backward()
-
-    dQ_ref = Q_ref.grad.detach()
-    dK_ref = K_ref.grad.detach()
-    dV_ref = V_ref.grad.detach()
-
-    outcpu_ref, lsecpu_ref = dot_product_attention(Qcpu_ref, Kcpu_ref, Vcpu_ref)
-    grad_out_cpu = torch.randn_like(outcpu_ref)
-
-    loss_cpu_ref = (outcpu_ref * grad_out_cpu).sum()
-    loss_cpu_ref.backward()
-
-    dQ, dK, dV = flash_attn.flashattention_backward(Q, K, V, output, grad_out, logsumexp)
-
-    print("BACKWARD GPU CORRECTNESS")
+def check_backward_close(name, dQ, dK, dV, dQ_ref, dK_ref, dV_ref):
+    print(name)
     print("dQ allclose:", torch.allclose(dQ, dQ_ref, atol=1e-3, rtol=1e-3))
     print("dK allclose:", torch.allclose(dK, dK_ref, atol=1e-3, rtol=1e-3))
     print("dV allclose:", torch.allclose(dV, dV_ref, atol=1e-3, rtol=1e-3))
     print("max abs diff dQ:", (dQ - dQ_ref).abs().max().item())
     print("max abs diff dK:", (dK - dK_ref).abs().max().item())
     print("max abs diff dV:", (dV - dV_ref).abs().max().item())
-    print()
 
-    print("BACKWARD CPU CORRECTNESS")
-    print("dQ allclose:", torch.allclose(dQ_cpu, dQcpu_ref, atol=1e-3, rtol=1e-3))
-    print("dK allclose:", torch.allclose(dK_cpu, dKcpu_ref, atol=1e-3, rtol=1e-3))
-    print("dV allclose:", torch.allclose(dV_cpu, dVcpu_ref, atol=1e-3, rtol=1e-3))
-    print("max abs diff dQ:", (dQ_cpu - dQcpu_ref).abs().max().item())
-    print("max abs diff dK:", (dK_cpu - dKcpu_ref).abs().max().item())
-    print("max abs diff dV:", (dV_cpu - dVcpu_ref).abs().max().item())
-    print()
+def reference_backward(q_in, k_in, v_in, grad_out):
+    q = q_in.clone().detach().requires_grad_(True)
+    k = k_in.clone().detach().requires_grad_(True)
+    v = v_in.clone().detach().requires_grad_(True)
 
+    out, _ = dot_product_attention(q, k, v)
+    dQ, dK, dV = torch.autograd.grad(outputs=out, inputs=(q, k, v), grad_outputs=grad_out, retain_graph=False, create_graph=False, allow_unused=False)
 
-    # --------------------------------------------------
-    # Helpers
-    # --------------------------------------------------
-    def cuda_sync():
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+    return dQ, dK, dV
 
-    def profiler_activities():
-        acts = [ProfilerActivity.CPU]
-        if torch.cuda.is_available():
-            acts.append(ProfilerActivity.CUDA)
-        return acts
+def alloc_forward_outputs(Q):
+    O = torch.empty_like(Q)
+    LSE = torch.empty(Q.shape[:-1], device=Q.device, dtype=torch.float32)
+    return O, LSE
 
-    def warmup(fn, iters=10):
-        for _ in range(iters):
-            fn()
-        cuda_sync()
+def alloc_backward_outputs(Q, K, V, O, dO):
+    dQ = torch.zeros_like(Q)
+    dK = torch.zeros_like(K)
+    dV = torch.zeros_like(V)
+    D = torch.sum(O * dO, axis=-1)
+    return dQ, dK, dV, D
 
-    def print_prof_summary(prof, label, row_limit=25):
-        sort_key = "self_cuda_time_total" if torch.cuda.is_available() else "self_cpu_time_total"
-        print(f"\n{'=' * 100}")
-        print(label)
-        print(f"{'=' * 100}")
-        print(prof.key_averages().table(sort_by=sort_key, row_limit=row_limit))
+def main():
+    if len(sys.argv) != 5:
+        print("usage: python3 test_backward_pass.py B H N D")
+        sys.exit(1)
 
+    B = int(sys.argv[1])
+    H = int(sys.argv[2])
+    N = int(sys.argv[3])
+    D_dim = int(sys.argv[4])
 
-    # --------------------------------------------------
-    # Workloads
-    # --------------------------------------------------
-    def run_ref_forward():
-        out, lse = dot_product_attention(Q, K, V)
-        return out, lse
+    print(f"running backward pass with dimensions [{B}, {H}, {N}, {D_dim}]")
 
-    def run_flash_forward():
-        out, lse = flash_attn.flashattention_forward(Q, K, V)
-        return out, lse
+    torch.manual_seed(0)
 
-    def run_flash_cpu_forward():
-        out, lse = flash_attn.flashattention_forward_cpu(Q_cpu, K_cpu, V_cpu)
-        return out, lse
+    has_cuda = torch.cuda.is_available()
+    device_cpu = torch.device("cpu")
+    device_gpu = torch.device("cuda") if has_cuda else None
 
-    def run_cpu_forward():
-        output_cpu, logsumexp_cpu = dot_product_attention(Q_cpu, K_cpu, V_cpu)
-        return output_cpu, logsumexp_cpu
+    Q_cpu = torch.rand(B, H, N, D_dim, device=device_cpu, dtype=torch.float32).contiguous()
+    K_cpu = torch.rand(B, H, N, D_dim, device=device_cpu, dtype=torch.float32).contiguous()
+    V_cpu = torch.rand(B, H, N, D_dim, device=device_cpu, dtype=torch.float32).contiguous()
 
-    def run_ref_backward():
-        q = Q.clone().detach().requires_grad_(True)
-        k = K.clone().detach().requires_grad_(True)
-        v = V.clone().detach().requires_grad_(True)
+    grad_out_cpu = torch.randn(B, H, N, D_dim, device=device_cpu, dtype=torch.float32).contiguous()
 
-        out, _ = dot_product_attention(q, k, v)
+    if has_cuda:
+        Q_gpu = Q_cpu.to(device_gpu).contiguous()
+        K_gpu = K_cpu.to(device_gpu).contiguous()
+        V_gpu = V_cpu.to(device_gpu).contiguous()
+        grad_out_gpu = grad_out_cpu.to(device_gpu).contiguous()
 
-        dQ_ref, dK_ref, dV_ref = torch.autograd.grad(
-            outputs=out,
-            inputs=(q, k, v),
-            grad_outputs=grad_out,
-            retain_graph=False, create_graph=False, allow_unused=False)
-        return dQ_ref, dK_ref, dV_ref
+    dQ_cpu_ref, dK_cpu_ref, dV_cpu_ref = reference_backward(Q_cpu, K_cpu, V_cpu, grad_out_cpu)
+    out_cpu, lse_cpu = alloc_forward_outputs(Q_cpu)
+    flash_attn.flashattention_forward_cpu(Q_cpu, K_cpu, V_cpu, out_cpu, lse_cpu)
+    dQ_cpu, dK_cpu, dV_cpu, D_cpu = alloc_backward_outputs(Q_cpu, K_cpu, V_cpu, out_cpu, grad_out_cpu)
+    flash_attn.flashattention_backward_cpu(Q_cpu, K_cpu, V_cpu, out_cpu, grad_out_cpu, lse_cpu, dQ_cpu, dK_cpu, dV_cpu, D_cpu)
 
-    def run_flash_backward():
-        out, lse = flash_attn.flashattention_forward(Q, K, V)
-        dQ, dK, dV = flash_attn.flashattention_backward(Q, K, V, out, grad_out, lse)
-        return dQ, dK, dV
+    check_backward_close("BACKWARD CPU CORRECTNESS", dQ_cpu, dK_cpu, dV_cpu, dQ_cpu_ref, dK_cpu_ref, dV_cpu_ref)
 
-    def run_cpu_backward():
-        q = Q_cpu.clone().detach().requires_grad_(True)
-        k = K_cpu.clone().detach().requires_grad_(True)
-        v = V_cpu.clone().detach().requires_grad_(True)
+    if has_cuda:
+        dQ_gpu_ref, dK_gpu_ref, dV_gpu_ref = reference_backward(Q_gpu, K_gpu, V_gpu, grad_out_gpu)
+        out_gpu, lse_gpu = alloc_forward_outputs(Q_gpu)
+        flash_attn.flashattention_forward(Q_gpu, K_gpu, V_gpu, out_gpu, lse_gpu)
+        dQ_gpu, dK_gpu, dV_gpu, D_gpu = alloc_backward_outputs(Q_gpu, K_gpu, V_gpu, out_gpu, grad_out_gpu)
+        flash_attn.flashattention_backward(Q_gpu, K_gpu, V_gpu, out_gpu, grad_out_gpu, lse_gpu, dQ_gpu, dK_gpu, dV_gpu, D_gpu)
+        torch.cuda.synchronize()
 
-        out_cpu, _ = dot_product_attention(q, k, v)
+        check_backward_close("BACKWARD GPU CORRECTNESS", dQ_gpu, dK_gpu, dV_gpu, dQ_gpu_ref, dK_gpu_ref, dV_gpu_ref)
 
-        dQ_ref, dK_ref, dV_ref = torch.autograd.grad(
-            outputs=out_cpu,
-            inputs=(q, k, v),
-            grad_outputs=grad_out_cpu,
-            retain_graph=False, create_graph=False, allow_unused=False)
-        return dQ_ref, dK_ref, dV_ref
+    def run_ref_cpu_backward():
+        return reference_backward(Q_cpu, K_cpu, V_cpu, grad_out_cpu)
 
     def run_flash_cpu_backward():
-        out_cpu, lse_cpu = flash_attn.flashattention_forward_cpu(Q_cpu, K_cpu, V_cpu)
-        dQ, dK, dV = flash_attn.flashattention_backward_cpu(Q_cpu, K_cpu, V_cpu, out_cpu, grad_cpu_fa, lse_cpu)
+        out, lse = alloc_forward_outputs(Q_cpu)
+        flash_attn.flashattention_forward_cpu(Q_cpu, K_cpu, V_cpu, out, lse)
+
+        dQ, dK, dV, D_tmp = alloc_backward_outputs(Q_cpu, K_cpu, V_cpu, out, grad_out_cpu)
+        flash_attn.flashattention_backward_cpu(Q_cpu, K_cpu, V_cpu, out, grad_out_cpu, lse, dQ, dK, dV, D_tmp)
+
         return dQ, dK, dV
 
-    # --------------------------------------------------
-    # Profile simple repeated regions
-    # --------------------------------------------------
-    def profile_region(label, fn, warmup_iters=10, active_iters=20, row_limit=25, trace_file=None):
-        warmup(fn, warmup_iters)
+    if has_cuda:
+        def run_ref_gpu_backward():
+            return reference_backward(Q_gpu, K_gpu, V_gpu, grad_out_gpu)
 
-        with profile(activities=profiler_activities(), record_shapes=True, profile_memory=True, with_stack=False) as prof:
-            for _ in range(active_iters):
-                with record_function(label):
-                    fn()
+        def run_flash_gpu_backward():
+            out, lse = alloc_forward_outputs(Q_gpu)
+            flash_attn.flashattention_forward(Q_gpu, K_gpu, V_gpu, out, lse)
 
-        cuda_sync()
-        print_prof_summary(prof, f"{label} ({active_iters} iterations)", row_limit=row_limit)
+            dQ, dK, dV, D_tmp = alloc_backward_outputs(Q_gpu, K_gpu, V_gpu, out, grad_out_gpu)
+            flash_attn.flashattention_backward(Q_gpu, K_gpu, V_gpu, out, grad_out_gpu, lse, dQ, dK, dV, D_tmp)
 
-        if trace_file is not None:
-            prof.export_chrome_trace(trace_file)
-            print(f"chrome trace saved to: {trace_file}")
+            return dQ, dK, dV
 
-        return prof
+    print("\n" + "=" * 80)
+    print("TIMING RESULTS")
+    print("=" * 80)
 
+    if has_cuda:
+        ref_gpu_ms = time_fn(run_ref_gpu_backward, use_cuda=True, warmup_iters=3,active_iters=10)
+        flash_gpu_ms = time_fn(run_flash_gpu_backward, use_cuda=True, warmup_iters=3, active_iters=10)
 
-    # --------------------------------------------------
-    # Run profiler
-    # --------------------------------------------------
-    # prof_ref_fwd = profile_region(label="reference_forward", fn=run_ref_forward, warmup_iters=10, active_iters=20, row_limit=20, trace_file="./out/logs/reference_forward_trace.json")
-    # prof_ref_fwd = profile_region(label="cpu_forward", fn=run_cpu_forward, warmup_iters=10, active_iters=20, row_limit=20, trace_file="./out/logs/cpu_forward_trace.json")
+        print(f"GPU reference backward: {ref_gpu_ms:.4f} ms / iter")
+        print(f"GPU flash backward:     {flash_gpu_ms:.4f} ms / iter")
 
-    # prof_flash_fwd = profile_region(
-    #     label="flash_cpu_forward",
-    #     fn=run_flash_cpu_forward,
-    #     warmup_iters=10,
-    #     active_iters=20,
-    #     row_limit=20,
-    #     trace_file="./out/logs/flash_cpu_forward_trace.json")
+    ref_cpu_ms = time_fn(run_ref_cpu_backward, use_cuda=False, warmup_iters=1, active_iters=3)
+    flash_cpu_ms = time_fn(run_flash_cpu_backward, use_cuda=False, warmup_iters=1, active_iters=3)
 
-    # prof_flash_fwd = profile_region(
-    #     label="flash_forward",
-    #     fn=run_flash_forward,
-    #     warmup_iters=10,
-    #     active_iters=20,
-    #     row_limit=20,
-    #     trace_file="./out/logs/flash_forward_trace.json")
+    print(f"CPU reference backward: {ref_cpu_ms:.4f} ms / iter")
+    print(f"CPU flash backward:     {flash_cpu_ms:.4f} ms / iter")
 
-    prof_ref_bwd = profile_region(
-        label="reference_backward",
-        fn=run_ref_backward,
-        warmup_iters=10,
-        active_iters=20,
-        row_limit=20,
-        trace_file="./out/logs/reference_backward_trace.json")
-
-    prof_ref_bwd = profile_region(
-        label="cpu_backward",
-        fn=run_cpu_backward,
-        warmup_iters=10,
-        active_iters=20,
-        row_limit=20,
-        trace_file="./out/logs/cpu_backward_trace.json")
-
-    prof_flash_bwd = profile_region(
-        label="flash_cpu_backward",
-        fn=run_flash_cpu_backward,
-        warmup_iters=10,
-        active_iters=20,
-        row_limit=20,
-        trace_file="./out/logs/flash_manual_backward_trace.json")
-
-    prof_flash_bwd = profile_region(
-        label="flash_backward",
-        fn=run_flash_backward,
-        warmup_iters=10,
-        active_iters=20,
-        row_limit=20,
-        trace_file="./out/logs/flash_manual_backward_trace.json")
-    
-main()
+if __name__ == "__main__":
+    main()
