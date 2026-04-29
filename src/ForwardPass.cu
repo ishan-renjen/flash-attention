@@ -168,8 +168,8 @@ std::vector<torch::Tensor> forward(torch::Tensor Q, torch::Tensor K, torch::Tens
     const int N = Q.size(2);
     const int d = Q.size(3);
 
-    constexpr int Br = 32;
-    constexpr int Bc = 32;
+    constexpr int Br = 16;
+    constexpr int Bc = 16;
 
     const int Tr = (N + Br - 1) / Br;
     const int Tc = (N + Bc - 1) / Bc;

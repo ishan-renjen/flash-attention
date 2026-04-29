@@ -1,0 +1,1 @@
+python3 python/test/test_backward_pass.py > ./out/results/backward_pass_results.txt

@@ -1,1 +1,0 @@
-python3 python/test/test_attention.py > ./out/results/attn_test_results.txt

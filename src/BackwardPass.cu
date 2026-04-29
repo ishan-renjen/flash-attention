@@ -54,36 +54,22 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
     float* dPij = &Pij[s_tile_size];
     float* dSij = &dPij[s_tile_size];
 
-    __syncthreads();
-
-    // Load Kj and Vj into SRAM
-    if (r < Bc && c == 0) 
+    // Load Kj and Vj into SRAM & initialize dKj/dVj
+    if (r < Bc) 
     {
-        if (col_base + r < N) 
+        for (int x = c; x < d; x += Bc) 
         {
-            #pragma unroll
-            for (int x = 0; x < d; x++) 
+            if (col_base + r < N) 
             {
                 Kj[r * d + x] = K[col_offset_qkv + r * d + x];
                 Vj[r * d + x] = V[col_offset_qkv + r * d + x];
-            }
-        }
-        else 
-        {
-            #pragma unroll
-            for (int x = 0; x < d; x++) 
+            } 
+            else 
             {
                 Kj[r * d + x] = 0.0f;
                 Vj[r * d + x] = 0.0f;
             }
-        }
-    }
 
-    if (r < Bc && c == 0) 
-    {
-        #pragma unroll
-        for (int x = 0; x < d; x++) 
-        {
             dKj[r * d + x] = 0.0f;
             dVj[r * d + x] = 0.0f;
         }
@@ -109,37 +95,39 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
             }
         }
 
-        // Load Qi, Oi, dOi, Li, Di to SRAM
-        if (r < Br && c == 0) 
+        // Load Qi, Oi, dOi, Li, Di to SRAM & initialize dQi
+        if (r < Br) 
         {
-            if (global_row < N) 
+            for (int x = c; x < d; x += Bc) 
             {
-                #pragma unroll
-                for (int x = 0; x < d; x++) 
+                if (global_row < N) 
                 {
                     Qi[r * d + x]  = Q[row_offset_qkv + r * d + x];
                     Oi[r * d + x]  = O[row_offset_qkv + r * d + x];
                     dOi[r * d + x] = dO[row_offset_qkv + r * d + x];
-                    //dQi[r * d + x] = dQ[row_offset_qkv + r * d + x];
-                }
-
-                Li[r] = L[row_offset_ld + r];
-                Di[r] = D[row_offset_ld + r];
-
-            }
-            else 
-            {
-                #pragma unroll
-                for (int x = 0; x < d; x++) 
+                } 
+                else 
                 {
                     Qi[r * d + x]  = 0.0f;
                     Oi[r * d + x]  = 0.0f;
                     dOi[r * d + x] = 0.0f;
-                    //dQi[r * d + x] = 0.0f;
                 }
 
-                Li[r] = 0.0f;
-                Di[r] = 0.0f;
+                dQi[r * d + x] = 0.0f;
+            }
+
+            if (c == 0) 
+            {
+                if (global_row < N) 
+                {
+                    Li[r] = L[row_offset_ld + r];
+                    Di[r] = D[row_offset_ld + r];
+                } 
+                else 
+                {
+                    Li[r] = 0.0f;
+                    Di[r] = 0.0f;
+                }
             }
         }
 
@@ -183,28 +171,32 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
         __syncthreads();
 
         // Compute dVj = dVj + (Pij)^T * dOi
-        if (r < Bc && c == 0) 
+        if (r < Bc) 
         {
-            if (col_base + r < N) 
+            int global_kv_row = col_base + r;
+
+            if (global_kv_row < N) 
             {
-                #pragma unroll
-                for (int x = 0; x < d; x++) 
+                for (int x = c; x < d; x += Bc) 
                 {
                     float sum = 0.0f;
-                    #pragma unroll
+
                     for (int rr = 0; rr < Br; rr++) 
                     {
-                        int g_row = row_base + rr;
-                        if (g_row < N) 
+                        int global_q_row = row_base + rr;
+
+                        if (global_q_row < N) 
                         {
                             sum += Pij[rr * Bc + r] * dOi[rr * d + x];
                         }
                     }
-                    
+
                     dVj[r * d + x] += sum;
                 }
             }
         }
+
+        __syncthreads();
 
         // Compute dPij = dOi * Vj^T
         if (r < Br && c < Bc) 
@@ -243,17 +235,16 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
         __syncthreads();
 
         // dQi = dQi + dSij * Kj
-        if (r < Br && c == 0) 
+        if (r < Br) 
         {
-            #pragma unroll
-            for (int x = 0; x < d; x++) 
+            for (int x = c; x < d; x += Bc) 
             {
                 float sum = 0.0f;
-                #pragma unroll
+
                 for (int cc = 0; cc < Bc; cc++) 
                 {
                     int g_col = col_base + cc;
-                    if (g_col < N)
+                    if (g_col < N) 
                     {
                         sum += dSij[r * Bc + cc] * Kj[cc * d + x];
                     }
@@ -266,28 +257,23 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
         __syncthreads();
 
         // Write dQi to HBM
-        if (r < Br && c == 0) 
+        if (r < Br && global_row < N) 
         {
-            if (global_row < N) 
+            for (int x = c; x < d; x += Bc) 
             {
-                #pragma unroll
-                for (int x = 0; x < d; x++) 
-                {
-                    atomicAdd(&dQ[row_offset_qkv + r * d + x], dQi[r * d + x]);
-                }
+                atomicAdd(&dQ[row_offset_qkv + r * d + x], dQi[r * d + x]);
             }
         }
 
         // Compute dKj = dKj + (dSij)^T * Qi
-        if (r < Bc && c == 0) 
+        if (r < Bc) 
         {
-            if (col_base + r < N) 
+            for (int x = c; x < d; x += Bc) 
             {
-                #pragma unroll
-                for (int x = 0; x < d; x++) 
+                if (col_base + r < N) 
                 {
                     float sum = 0.0f;
-                    #pragma unroll
+
                     for (int rr = 0; rr < Br; rr++) 
                     {
                         int g_row = row_base + rr;
@@ -301,25 +287,20 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
                 }
             }
         }
-
-        __syncthreads();
     }
 
     __syncthreads();
 
     // Write dKj and dVj to HBM
-    if (r < Bc && c == 0) 
+    if (r < Bc && col_base + r < N) 
     {
-        if (col_base + r < N) 
+        for (int x = c; x < d; x += Bc) 
         {
-            #pragma unroll
-            for (int x = 0; x < d; x++) 
-            {
-                dK[col_offset_qkv + r * d + x] = dKj[r * d + x];
-                dV[col_offset_qkv + r * d + x] = dVj[r * d + x];
-            }
+            dK[col_offset_qkv + r * d + x] = dKj[r * d + x];
+            dV[col_offset_qkv + r * d + x] = dVj[r * d + x];
         }
     }
+
 }
 
 std::vector<torch::Tensor> backward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, 
@@ -418,12 +399,6 @@ std::vector<torch::Tensor> backward(torch::Tensor Q, torch::Tensor K, torch::Ten
         N, d, Br, Bc, Tr, Tc,
         attentionScalar
     ); 
-
-    cudaError_t err = cudaGetLastError();
-    TORCH_CHECK(err == cudaSuccess, "backward kernel launch failed: ", cudaGetErrorString(err));
-
-    err = cudaDeviceSynchronize();
-    TORCH_CHECK(err == cudaSuccess, "backward kernel execution failed: ", cudaGetErrorString(err));
 
     return {dQ, dK, dV};
 }
