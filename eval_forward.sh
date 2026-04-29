@@ -1,0 +1,1 @@
+python3 python/test/test_forward_pass.py > ./out/results/forward_pass_results.txt
