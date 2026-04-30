@@ -1,0 +1,24 @@
+ninja: no work to do.
+running backward pass with dimensions [2, 8, 8192, 64]
+BACKWARD CPU CORRECTNESS
+dQ allclose: True
+dK allclose: True
+dV allclose: True
+max abs diff dQ: 9.818468242883682e-07
+max abs diff dK: 1.5366822481155396e-08
+max abs diff dV: 7.450580596923828e-08
+BACKWARD GPU CORRECTNESS
+dQ allclose: True
+dK allclose: True
+dV allclose: True
+max abs diff dQ: 4.313187673687935e-06
+max abs diff dK: 6.239861249923706e-08
+max abs diff dV: 2.8870999813079834e-07
+
+================================================================================
+TIMING RESULTS
+================================================================================
+GPU reference backward: 179.3579 ms / iter
+GPU flash backward:     1191.2823 ms / iter
+CPU reference backward: 1826.3498 ms / iter
+CPU flash backward:     312481.1050 ms / iter

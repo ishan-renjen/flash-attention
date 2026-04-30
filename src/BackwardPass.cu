@@ -19,19 +19,26 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
                                 const unsigned int Tr, const unsigned int Tc,    //number of blocks per row and column
                                 const float attentionScalar)                     //scale the Q*K inside of the softmax function with this          
 {
-    int r = threadIdx.x;   // row in Br tile
-    int c = threadIdx.y;   // col in Bc tile
+    int r = threadIdx.x;   // row index
+    int c = threadIdx.y;   // col index
 
-    int j = blockIdx.x;    // column tile index
+    // One block per K/V col tile (j), head, and batch element
+    int j = blockIdx.x;    // column tile index for K/V
     int h = blockIdx.y;    // head
     int b = blockIdx.z;    // batch
 
+    // (b * gridDim.y) + h --> (batchNum * numHeads) + head
+    // N x d elements in Q, K, and V per head
     int qkv_offset = ((b * gridDim.y) + h) * N * d;
+
+    // (b * gridDim.y) + h --> (batchNum * numHeads) + head
+    // N elements in L and D per head
     int ld_offset  = ((b * gridDim.y) + h) * N;
 
-    int col_base = j * Bc;
-    int global_col = col_base + c;
-    int col_offset_qkv = qkv_offset + col_base * d;
+    
+    int col_base = j * Bc;                          // Starting column tile index
+    int global_col = col_base + c;                  // starting index + offset of current thread
+    int col_offset_qkv = qkv_offset + col_base * d; // Base address of tile 
 
     extern __shared__ float sram[];
 
@@ -55,13 +62,16 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
     float* dPij = &Pij[s_tile_size];
     float* dSij = &dPij[s_tile_size];
 
-    // Load Kj and Vj into SRAM & initialize dKj/dVj
+    // Kj and Vj are [Bc, d] --> 0 <= r < Bc
     if (r < Bc) 
     {
+        // Load Kj and Vj into SRAM & initialize dKj/dVj
         for (int x = c; x < d; x += Bc) 
         {
+            // Check for valid sequence position
             if (col_base + r < N) 
             {
+                // (r * d) + x = (tile row * head dim) + col offset
                 Kj[r * d + x] = K[col_offset_qkv + r * d + x];
                 Vj[r * d + x] = V[col_offset_qkv + r * d + x];
             } 
@@ -78,29 +88,22 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
 
     __syncthreads();
 
-    // Loop over row tiles
+    // Loop over row tiles (Tr row tiles, Br rows per tile)
     #pragma unroll
     for (int i = 0; i < Tr; i++)
     {
-        int row_base = i * Br;
-        int global_row = row_base + r;
-        int row_offset_qkv = qkv_offset + row_base * d;
-        int row_offset_ld  = ld_offset + row_base;
+        int row_base = i * Br;                           // starting row tile index 
+        int global_row = row_base + r;                   // starting row tile index + row offset of thread
+        int row_offset_qkv = qkv_offset + row_base * d;  // starting memory address of Q/O/dO per row tile
+        int row_offset_ld  = ld_offset + row_base;       // starting memory address of L/D per row tile
 
-        // Initialize dQi
-        if (r < Br && c == 0)
-        {
-            for (int x = 0; x < d; x++)
-            {
-                dQi[r * d + x] = 0.0f;
-            }
-        }
-
-        // Load Qi, Oi, dOi, Li, Di to SRAM & initialize dQi
+        // Check for valid row index
         if (r < Br) 
         {
+            // Load Qi, Oi, dOi, Li, Di to SRAM & initialize dQi
             for (int x = c; x < d; x += Bc) 
             {
+                // Check for valid sequence position
                 if (global_row < N) 
                 {
                     Qi[r * d + x]  = Q[row_offset_qkv + r * d + x];
@@ -117,6 +120,7 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
                 dQi[r * d + x] = 0.0f;
             }
 
+            // Li and Di have 1 scalar per row --> load using only 1 thread
             if (c == 0) 
             {
                 if (global_row < N) 
@@ -135,17 +139,21 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
         __syncthreads();
 
         // Compute Sij = Qi * Kj^T
+        // Check for valid row and col indices
         if (r < Br && c < Bc) 
         {
+            // Check for valid sequence positions
             if (global_row < N && global_col < N) 
             {
                 float sum = 0.0f;
                 #pragma unroll
                 for (int x = 0; x < d; x++) 
                 {
+                    // Qi(Kj)^T
                     sum += Qi[r * d + x] * Kj[c * d + x];
                 }
 
+                // Apply scaling
                 Sij[r * Bc + c] = attentionScalar * sum;
             } 
             else
@@ -157,8 +165,10 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
         __syncthreads();
 
         // Compute Pij = exp(Sij - Li)
+        // Check that the thread row and col indices are within the tile
         if (r < Br && c < Bc) 
         {
+            // Check for threads that are out-of-bounds
             if (global_row < N && global_col < N) 
             {
                 Pij[r * Bc + c] = __expf(Sij[r * Bc + c] - Li[r]);

@@ -1,0 +1,10 @@
+[1/2] /usr/local/cuda/bin/nvcc -MD -MF BackwardPass.cuda.o.d -DTORCH_EXTENSION_NAME=flash_attn_ext -DTORCH_API_INCLUDE_EXTENSION_H -isystem /home/inr8842/flash-attention/.venv/lib/python3.13/site-packages/torch/include -isystem /home/inr8842/flash-attention/.venv/lib/python3.13/site-packages/torch/include/torch/csrc/api/include -isystem /usr/local/cuda/include -isystem /home/inr8842/miniconda3/include/python3.13 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_86,code=compute_86 -gencode=arch=compute_86,code=sm_86 --compiler-options '-fPIC' -std=c++17 -c /home/inr8842/flash-attention/src/BackwardPass.cu -o BackwardPass.cuda.o 
+[2/2] c++ main.o ForwardPass.cuda.o BackwardPass.cuda.o ForwardPassCPU.o BackwardPassCPU.o -shared -L/home/inr8842/flash-attention/.venv/lib/python3.13/site-packages/torch/lib -lc10 -lc10_cuda -ltorch_cpu -ltorch_cuda -ltorch -ltorch_python -L/usr/local/cuda/lib64 -lcudart -o flash_attn_ext.so
+running backward pass with dimensions [1, 8, 16384, 64]
+BACKWARD CPU CORRECTNESS
+dQ allclose: True
+dK allclose: True
+dV allclose: True
+max abs diff dQ: 9.777249942999333e-07
+max abs diff dK: 1.4901161193847656e-08
+max abs diff dV: 7.82310962677002e-08

@@ -1,0 +1,20 @@
+ninja: no work to do.
+running forward pass with dimensions [1, 8, 8, 64]
+FORWARD GPU CORRECTNESS
+output allclose: True
+logsumexp allclose: True
+max abs diff output: 1.7881393432617188e-07
+max abs diff logsumexp: 4.76837158203125e-07
+FORWARD CPU CORRECTNESS
+output allclose: True
+logsumexp allclose: True
+max abs diff output: 1.1920928955078125e-07
+max abs diff logsumexp: 0.0
+
+================================================================================
+TIMING RESULTS
+================================================================================
+GPU reference forward: 0.1590 ms / iter
+GPU flash forward:     0.0282 ms / iter
+CPU reference forward: 0.1135 ms / iter
+CPU flash forward:     1.2839 ms / iter

@@ -1,0 +1,9 @@
+ninja: no work to do.
+running backward pass with dimensions [1, 8, 16384, 64]
+BACKWARD CPU CORRECTNESS
+dQ allclose: True
+dK allclose: True
+dV allclose: True
+max abs diff dQ: 9.777249942999333e-07
+max abs diff dK: 1.4901161193847656e-08
+max abs diff dV: 7.82310962677002e-08
