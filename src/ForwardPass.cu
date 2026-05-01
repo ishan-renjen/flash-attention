@@ -22,7 +22,7 @@ __global__ void forwardKernel(const float* __restrict__ Q, const float* __restri
     const int b  = blockIdx.x;
     const int h  = blockIdx.y;
     const int qi = blockIdx.z;
-    const int tx = threadIdx.x;   // one thread = one query row in the tile
+    const int tx = threadIdx.x;
 
     const int q_row = qi * Br + tx;
     const bool valid_q = (q_row < N);
@@ -32,12 +32,13 @@ __global__ void forwardKernel(const float* __restrict__ Q, const float* __restri
     const int lse_base = bh * N;
 
     extern __shared__ float sram[];
+
     float* sQ = sram;                 // [Br, D]
     float* sK = sQ + Br * D;          // [Bc, D]
     float* sV = sK + Bc * D;          // [Bc, D]
     float* sS = sV + Bc * D;          // [Br, Bc]
 
-    // Load Q tile once.
+    //load Q tile
     for (int idx = tx; idx < Br * D; idx += blockDim.x) {
         const int local_row = idx / D;
         const int local_col = idx % D;
@@ -61,10 +62,9 @@ __global__ void forwardKernel(const float* __restrict__ Q, const float* __restri
         o_accum[x] = 0.0f;
     }
 
-    // Sweep through K/V tiles.
     #pragma unroll
     for (int j = 0; j < Tc; ++j) {
-        // Load K and V tile cooperatively.
+        // Load K and V tile
         #pragma unroll
         for (int idx = tx; idx < Bc * D; idx += blockDim.x) {
             const int local_row = idx / D;
@@ -86,7 +86,6 @@ __global__ void forwardKernel(const float* __restrict__ Q, const float* __restri
         if (valid_q) {
             float row_max_local = -INFINITY;
 
-            // First pass: compute scores and row max.
             #pragma unroll
             for (int c = 0; c < Bc; ++c) {
                 const int k_row = j * Bc + c;
@@ -109,13 +108,12 @@ __global__ void forwardKernel(const float* __restrict__ Q, const float* __restri
             const float alpha = __expf(m - m_new);
             float l_new = alpha * l;
 
-            // Scale old accumulator once.
             #pragma unroll
             for (int x = 0; x < D; ++x) {
                 o_accum[x] *= alpha;
             }
 
-            // Second pass: softmax weights and PV accumulation.
+            //softmax
             #pragma unroll
             for (int c = 0; c < Bc; ++c) {
                 const int k_row = j * Bc + c;
