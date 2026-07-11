@@ -8,6 +8,9 @@ flash_attn = load(name="flash_attn_ext",
                   sources=["./src/main.cpp", 
                            "./src/ForwardPass.cu", "./src/BackwardPass.cu", 
                            "./src/ForwardPassCPU.cpp", "./src/BackwardPassCPU.cpp"], 
+                  extra_cuda_cflags=[
+                                "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+                            ],
                            verbose=True)
 
 def dot_product_attention(q, k, v):

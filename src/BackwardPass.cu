@@ -3,6 +3,7 @@
 
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <cuda_bf16.h>
 
 #include <torch/types.h>
 #include <torch/extension.h>
@@ -10,10 +11,10 @@
 
 #include "FlashAttention.h"
 
-__global__ void backwardKernel(const float* __restrict__ Q, const float* __restrict__ K, const float* __restrict__ V,   //Query, Key, Value
-                                const float* __restrict__ O, const float* __restrict__ dO,                 //output, output gradient
-                                const float* __restrict__ L, const float* __restrict__ D,                  // logsumexp, normalization terms
-                                float* __restrict__ dQ, float* __restrict__ dK, float* __restrict__ dV,                 // Query, Key, Value gradients
+__global__ void backwardKernel(const __nv_bfloat16* __restrict__ Q, const __nv_bfloat16* __restrict__ K, const __nv_bfloat16* __restrict__ V,   //Query, Key, Value
+                                const __nv_bfloat16* __restrict__ O, const __nv_bfloat16* __restrict__ dO,                 //output, output gradient
+                                const __nv_bfloat16* __restrict__ L, const __nv_bfloat16* __restrict__ D,                  // logsumexp, normalization terms
+                                __nv_bfloat16* __restrict__ dQ, __nv_bfloat16* __restrict__ dK, __nv_bfloat16* __restrict__ dV,                 // Query, Key, Value gradients
                                 const unsigned int N, const unsigned int d,      //dimensions of QKV matrices [N, d]
                                 const unsigned int Br, const unsigned int Bc,    //block sizes [Br, Bc]
                                 const unsigned int Tr, const unsigned int Tc,    //number of blocks per row and column
@@ -34,33 +35,32 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
     // (b * gridDim.y) + h --> (batchNum * numHeads) + head
     // N elements in L and D per head
     int ld_offset  = ((b * gridDim.y) + h) * N;
-
     
     int col_base = j * Bc;                          // Starting column tile index
     int global_col = col_base + c;                  // starting index + offset of current thread
     int col_offset_qkv = qkv_offset + col_base * d; // Base address of tile 
 
-    extern __shared__ float sram[];
+    extern __shared__ __nv_bfloat16 sram[];
 
     int q_tile_size  = Br * d;    // Qi, Oi, dOi, dQi
     int kv_tile_size = Bc * d;    // Kj, Vj, dKj, dVj
     int s_tile_size  = Br * Bc;   // Sij, Pij, dPij, dSij
     int vec_tile_size = Br;       // Li, Di
 
-    float* Qi  = sram;
-    float* Kj  = &Qi[q_tile_size];
-    float* Vj  = &Kj[kv_tile_size];
-    float* Oi  = &Vj[kv_tile_size];
-    float* dOi = &Oi[q_tile_size];
-    float* dQi = &dOi[q_tile_size];
-    float* Li  = &dQi[q_tile_size];
-    float* Di  = &Li[vec_tile_size];
-    float* dKj = &Di[vec_tile_size];
-    float* dVj = &dKj[kv_tile_size];
-    float* Sij  = &dVj[kv_tile_size];
-    float* Pij  = &Sij[s_tile_size];
-    float* dPij = &Pij[s_tile_size];
-    float* dSij = &dPij[s_tile_size];
+    __nv_bfloat16* Qi  = sram;
+    __nv_bfloat16* Kj  = &Qi[q_tile_size];
+    __nv_bfloat16* Vj  = &Kj[kv_tile_size];
+    __nv_bfloat16* Oi  = &Vj[kv_tile_size];
+    __nv_bfloat16* dOi = &Oi[q_tile_size];
+    __nv_bfloat16* dQi = &dOi[q_tile_size];
+    __nv_bfloat16* Li  = &dQi[q_tile_size];
+    __nv_bfloat16* Di  = &Li[vec_tile_size];
+    __nv_bfloat16* dKj = &Di[vec_tile_size];
+    __nv_bfloat16* dVj = &dKj[kv_tile_size];
+    __nv_bfloat16* Sij  = &dVj[kv_tile_size];
+    __nv_bfloat16* Pij  = &Sij[s_tile_size];
+    __nv_bfloat16* dPij = &Pij[s_tile_size];
+    __nv_bfloat16* dSij = &dPij[s_tile_size];
 
     // Kj and Vj are [Bc, d] --> 0 <= r < Bc
     if (r < Bc) 
@@ -77,12 +77,12 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
             } 
             else 
             {
-                Kj[r * d + x] = 0.0f;
-                Vj[r * d + x] = 0.0f;
+                Kj[r * d + x] = (__nv_bfloat16)0.0f;
+                Vj[r * d + x] = (__nv_bfloat16)0.0f;
             }
 
-            dKj[r * d + x] = 0.0f;
-            dVj[r * d + x] = 0.0f;
+            dKj[r * d + x] = (__nv_bfloat16)0.0f;
+            dVj[r * d + x] = (__nv_bfloat16)0.0f;
         }
     }
 
@@ -112,12 +112,12 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
                 } 
                 else 
                 {
-                    Qi[r * d + x]  = 0.0f;
-                    Oi[r * d + x]  = 0.0f;
-                    dOi[r * d + x] = 0.0f;
+                    Qi[r * d + x]  = (__nv_bfloat16)0.0f;
+                    Oi[r * d + x]  = (__nv_bfloat16)0.0f;
+                    dOi[r * d + x] = (__nv_bfloat16)0.0f;
                 }
 
-                dQi[r * d + x] = 0.0f;
+                dQi[r * d + x] = (__nv_bfloat16)0.0f;
             }
 
             // Li and Di have 1 scalar per row --> load using only 1 thread
@@ -130,8 +130,8 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
                 } 
                 else 
                 {
-                    Li[r] = 0.0f;
-                    Di[r] = 0.0f;
+                    Li[r] = (__nv_bfloat16)0.0f;
+                    Di[r] = (__nv_bfloat16)0.0f;
                 }
             }
         }
@@ -145,12 +145,12 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
             // Check for valid sequence positions
             if (global_row < N && global_col < N) 
             {
-                float sum = 0.0f;
+                float sum = (__nv_bfloat16)0.0f;
                 #pragma unroll
                 for (int x = 0; x < d; x++) 
                 {
                     // Qi(Kj)^T
-                    sum += Qi[r * d + x] * Kj[c * d + x];
+                    sum += __bfloat162float(Qi[r * d + x]) * __bfloat162float(Kj[c * d + x]);
                 }
 
                 // Apply scaling
@@ -175,7 +175,7 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
             } 
             else 
             {
-                Pij[r * Bc + c] = 0.0f;
+                Pij[r * Bc + c] = (__nv_bfloat16)0.0f;
             }
         }
 
@@ -190,7 +190,7 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
             {
                 for (int x = c; x < d; x += Bc) 
                 {
-                    float sum = 0.0f;
+                    __nv_bfloat16 sum = (__nv_bfloat16)0.0f;
 
                     for (int rr = 0; rr < Br; rr++) 
                     {
@@ -214,17 +214,17 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
         {
             if (global_row < N && global_col < N)
             {
-                float sum = 0.0f;
+                float sum = (__nv_bfloat16)0.0f;
                 #pragma unroll
                 for (int x = 0; x < d; x++)
                 {
-                    sum += dOi[r * d + x] * Vj[c * d + x];
+                    sum += __bfloat162float(dOi[r * d + x]) * __bfloat162float(Vj[c * d + x]);
                 }
                 dPij[r * Bc + c] = sum;
             }
             else 
             {
-                dPij[r * Bc + c] = 0.0f;
+                dPij[r * Bc + c] = (__nv_bfloat16)0.0f;
             }
         }
 
@@ -239,7 +239,7 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
             }
             else
             {
-                dSij[r * Bc + c] = 0.0f;
+                dSij[r * Bc + c] = (__nv_bfloat16)0.0f;
             }
         }
 
@@ -257,7 +257,7 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
                     int g_col = col_base + cc;
                     if (g_col < N) 
                     {
-                        sum += dSij[r * Bc + cc] * Kj[cc * d + x];
+                        sum += __bfloat162float(dSij[r * Bc + cc]) * __bfloat162float(Kj[cc * d + x]);
                     }
                 }
 
@@ -283,14 +283,14 @@ __global__ void backwardKernel(const float* __restrict__ Q, const float* __restr
             {
                 if (col_base + r < N) 
                 {
-                    float sum = 0.0f;
+                    float sum = (__nv_bfloat16)0.0f;
 
                     for (int rr = 0; rr < Br; rr++) 
                     {
                         int g_row = row_base + rr;
                         if (g_row < N) 
                         {
-                            sum += dSij[rr * Bc + r] * Qi[rr * d + x];
+                            sum += __bfloat162float(dSij[rr * Bc + r]) * __bfloat162float(Qi[rr * d + x]);
                         }
                     }
 
@@ -341,11 +341,11 @@ void backward(torch::Tensor Q, torch::Tensor K, torch::Tensor V,
     TORCH_CHECK(dO.dim() == 4, "dO must have shape [B, H, N, d]");
 
     //check the dtype of Q, K, V
-    TORCH_CHECK(Q.scalar_type() == torch::kFloat32, "Q must be float32");
-    TORCH_CHECK(K.scalar_type() == torch::kFloat32, "K must be float32");
-    TORCH_CHECK(V.scalar_type() == torch::kFloat32, "V must be float32");
-    TORCH_CHECK(O.scalar_type() == torch::kFloat32, "O must be float32");
-    TORCH_CHECK(dO.scalar_type() == torch::kFloat32, "dO must be float32");
+    TORCH_CHECK(Q.scalar_type() == torch::kBFloat16, "Q must be kBFloat16");
+    TORCH_CHECK(K.scalar_type() == torch::kBFloat16, "K must be kBFloat16");
+    TORCH_CHECK(V.scalar_type() == torch::kBFloat16, "V must be kBFloat16");
+    TORCH_CHECK(O.scalar_type() == torch::kBFloat16, "O must be kBFloat16");
+    TORCH_CHECK(dO.scalar_type() == torch::kBFloat16, "dO must be kBFloat16");
 
     //check that Q, K, V dimensions match
     TORCH_CHECK(K.size(0) == Q.size(0) && V.size(0) == Q.size(0), "(Q,K,V) - Batch size mismatch");
@@ -377,7 +377,7 @@ void backward(torch::Tensor Q, torch::Tensor K, torch::Tensor V,
     // [Br x d]  : Qi, Oi, dOi, dQi
     // [Br x Bc] : Sij, Pij, dPij, dSij (Temps)
     // [Br]      : Li, Di
-    const int sramSize = ((4 * Bc * d) + (4 * Br * d) + (4 * Br * Bc) + (2 * Br)) * sizeof(float);
+    const int sramSize = ((4 * Bc * d) + (4 * Br * d) + (4 * Br * Bc) + (2 * Br)) * sizeof(__nv_bfloat16);
     int maxSramSize;
     int dev = Q.get_device();
     cudaDeviceGetAttribute(&maxSramSize, cudaDevAttrMaxSharedMemoryPerBlock, dev);
@@ -394,19 +394,18 @@ void backward(torch::Tensor Q, torch::Tensor K, torch::Tensor V,
     
     // Launch kernel
     backwardKernel<<<gridDim, blockDim, sramSize>>>(
-        Q.data_ptr<float>(),
-        K.data_ptr<float>(),
-        V.data_ptr<float>(),
-        O.data_ptr<float>(),
-        dO.data_ptr<float>(),
-        L.data_ptr<float>(),
-        D.data_ptr<float>(),
-        dQ.data_ptr<float>(),
-        dK.data_ptr<float>(),
-        dV.data_ptr<float>(),
+        Q.data_ptr<__nv_bfloat16>(),
+        K.data_ptr<__nv_bfloat16>(),
+        V.data_ptr<__nv_bfloat16>(),
+        O.data_ptr<__nv_bfloat16>(),
+        dO.data_ptr<__nv_bfloat16>(),
+        L.data_ptr<__nv_bfloat16>(),
+        D.data_ptr<__nv_bfloat16>(),
+        dQ.data_ptr<__nv_bfloat16>(),
+        dK.data_ptr<__nv_bfloat16>(),
+        dV.data_ptr<__nv_bfloat16>(),
         N, d, Br, Bc, Tr, Tc,
-        attentionScalar
-    ); 
+        attentionScalar); 
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }

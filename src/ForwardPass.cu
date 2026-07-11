@@ -15,8 +15,8 @@
 
 #define D 64
 
-__global__ void forwardKernel(const float* __restrict__ Q, const float* __restrict__ K, const float* __restrict__ V, 
-                                    float* __restrict__ O, float* __restrict__ LSE, 
+__global__ void forwardKernel(const __nv_bfloat16* __restrict__ Q, const __nv_bfloat16* __restrict__ K, const __nv_bfloat16* __restrict__ V, 
+                                    __nv_bfloat16* __restrict__ O, __nv_bfloat16* __restrict__ LSE, 
                                     const int N, const int Tc, const float scale,
                                     int Br, int Bc) {
     const int b  = blockIdx.x;
@@ -31,12 +31,12 @@ __global__ void forwardKernel(const float* __restrict__ Q, const float* __restri
     const int qkv_base = bh * N * D;
     const int lse_base = bh * N;
 
-    extern __shared__ float sram[];
+    extern __shared__ __nv_bfloat16 sram[];
 
-    float* sQ = sram;                 // [Br, D]
-    float* sK = sQ + Br * D;          // [Bc, D]
-    float* sV = sK + Bc * D;          // [Bc, D]
-    float* sS = sV + Bc * D;          // [Br, Bc]
+    __nv_bfloat16* sQ = sram;                 // [Br, D]
+    __nv_bfloat16* sK = sQ + Br * D;          // [Bc, D]
+    __nv_bfloat16* sV = sK + Bc * D;          // [Bc, D]
+    __nv_bfloat16* sS = sV + Bc * D;          // [Br, Bc]
 
     //load Q tile
     for (int idx = tx; idx < Br * D; idx += blockDim.x) {
@@ -48,7 +48,7 @@ __global__ void forwardKernel(const float* __restrict__ Q, const float* __restri
             sQ[local_row * D + local_col] =
                 Q[qkv_base + global_row * D + local_col];
         } else {
-            sQ[local_row * D + local_col] = 0.0f;
+            sQ[local_row * D + local_col] = (__nv_bfloat16)0.0f;
         }
     }
     __syncthreads();
@@ -77,8 +77,8 @@ __global__ void forwardKernel(const float* __restrict__ Q, const float* __restri
                 sV[local_row * D + local_col] =
                     V[qkv_base + global_row * D + local_col];
             } else {
-                sK[local_row * D + local_col] = 0.0f;
-                sV[local_row * D + local_col] = 0.0f;
+                sK[local_row * D + local_col] = (__nv_bfloat16)0.0f;
+                sV[local_row * D + local_col] = (__nv_bfloat16)0.0f;
             }
         }
         __syncthreads();
@@ -95,12 +95,12 @@ __global__ void forwardKernel(const float* __restrict__ Q, const float* __restri
                     score = 0.0f;
                     #pragma unroll
                     for (int x = 0; x < D; ++x) {
-                        score += sQ[tx * D + x] * sK[c * D + x];
+                        score += __bfloat162float(sQ[tx * D + x]) * __bfloat162float(sK[c * D + x]);
                     }
                     score *= scale;
                 }
 
-                sS[tx * Bc + c] = score;
+                sS[tx * Bc + c] = __float2bfloat16(score);
                 row_max_local = fmaxf(row_max_local, score);
             }
             
@@ -118,12 +118,12 @@ __global__ void forwardKernel(const float* __restrict__ Q, const float* __restri
             for (int c = 0; c < Bc; ++c) {
                 const int k_row = j * Bc + c;
                 if (k_row < N) {
-                    const float p = __expf(sS[tx * Bc + c] - m_new);
+                    const float p = __expf(__bfloat162float(sS[tx * Bc + c]) - m_new);
                     l_new += p;
 
                     #pragma unroll
                     for (int x = 0; x < D; ++x) {
-                        o_accum[x] += p * sV[c * D + x];
+                        o_accum[x] += p * __bfloat162float(sV[c * D + x]);
                     }
                 }
             }
@@ -140,10 +140,10 @@ __global__ void forwardKernel(const float* __restrict__ Q, const float* __restri
 
         #pragma unroll
         for (int x = 0; x < D; ++x) {
-            O[qkv_base + q_row * D + x] = o_accum[x] * inv_l;
+            O[qkv_base + q_row * D + x] = __float2bfloat16(o_accum[x] * inv_l);
         }
 
-        LSE[lse_base + q_row] = m + __logf(l);
+        LSE[lse_base + q_row] = __float2bfloat16(m + __logf(l));
     }
 }
 
@@ -160,7 +160,6 @@ void forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O,
     TORCH_CHECK(K.dim() == 4, "K must have shape [B, H, N, d]");
     TORCH_CHECK(V.dim() == 4, "V must have shape [B, H, N, d]");
     TORCH_CHECK(Q.sizes() == K.sizes() && Q.sizes() == V.sizes(), "Q/K/V shape mismatch");
-    TORCH_CHECK(Q.scalar_type() == torch::kFloat32, "Q must be float32");
 
     const int B = Q.size(0);
     const int H = Q.size(1);
@@ -177,13 +176,19 @@ void forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O,
     dim3 grid(B, H, Tr);
     dim3 block(Br);
 
-    const size_t smem = (Br * 64 + 2 * Bc * 64 + Br * Bc) * sizeof(float);
+    auto Q_ptr   = reinterpret_cast<const __nv_bfloat16*>(Q.data_ptr<at::BFloat16>());
+    auto K_ptr   = reinterpret_cast<const __nv_bfloat16*>(K.data_ptr<at::BFloat16>());
+    auto V_ptr   = reinterpret_cast<const __nv_bfloat16*>(V.data_ptr<at::BFloat16>());
+    auto O_ptr   = reinterpret_cast<__nv_bfloat16*>(O.data_ptr<at::BFloat16>());
+    auto LSE_ptr = reinterpret_cast<__nv_bfloat16*>(LSE.data_ptr<at::BFloat16>());
+
+    const size_t smem = (Br * 64 + 2 * Bc * 64 + Br * Bc) * sizeof(__nv_bfloat16);
     forwardKernel<<<grid, block, smem>>>(
-        Q.data_ptr<float>(),
-        K.data_ptr<float>(),
-        V.data_ptr<float>(),
-        O.data_ptr<float>(),
-        LSE.data_ptr<float>(),
+        Q_ptr,
+        K_ptr,
+        V_ptr,
+        O_ptr,
+        LSE_ptr,
         N,
         Tc,
         scale,

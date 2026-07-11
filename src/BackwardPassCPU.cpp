@@ -35,12 +35,12 @@ void backwardCPU(torch::Tensor Q, torch::Tensor K, torch::Tensor V,
     TORCH_CHECK(L.dim() == 3, "L must have shape [B, H, N]");
 
     //check the dtype of Q, K, V
-    TORCH_CHECK(Q.scalar_type() == torch::kFloat32, "Q must be float32");
-    TORCH_CHECK(K.scalar_type() == torch::kFloat32, "K must be float32");
-    TORCH_CHECK(V.scalar_type() == torch::kFloat32, "V must be float32");
-    TORCH_CHECK(O.scalar_type() == torch::kFloat32, "O must be float32");
-    TORCH_CHECK(dO.scalar_type() == torch::kFloat32, "dO must be float32");
-    TORCH_CHECK(L.scalar_type() == torch::kFloat32, "L must be float32");
+    TORCH_CHECK(Q.scalar_type() == torch::kBFloat16, "Q must be float32");
+    TORCH_CHECK(K.scalar_type() == torch::kBFloat16, "K must be float32");
+    TORCH_CHECK(V.scalar_type() == torch::kBFloat16, "V must be float32");
+    TORCH_CHECK(O.scalar_type() == torch::kBFloat16, "O must be float32");
+    TORCH_CHECK(dO.scalar_type() == torch::kBFloat16, "dO must be float32");
+    TORCH_CHECK(L.scalar_type() == torch::kBFloat16, "L must be float32");
 
     //check that Q, K, V dimensions match
     TORCH_CHECK(K.size(0) == Q.size(0) && V.size(0) == Q.size(0), "(Q,K,V) - Batch size mismatch");

@@ -12,9 +12,9 @@ void forwardCPU(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor
     TORCH_CHECK(K.device().is_cpu(), "K must be on CPU");
     TORCH_CHECK(V.device().is_cpu(), "V must be on CPU");
 
-    TORCH_CHECK(Q.dtype() == torch::kFloat32, "Q must be float32");
-    TORCH_CHECK(K.dtype() == torch::kFloat32, "K must be float32");
-    TORCH_CHECK(V.dtype() == torch::kFloat32, "V must be float32");
+    TORCH_CHECK(Q.dtype() == torch::kBFloat16, "Q must be kBFloat16");
+    TORCH_CHECK(K.dtype() == torch::kBFloat16, "K must be kBFloat16");
+    TORCH_CHECK(V.dtype() == torch::kBFloat16, "V must be kBFloat16");
 
     TORCH_CHECK(Q.dim() == 4, "Q must have shape [B, H, N, D]");
     TORCH_CHECK(K.dim() == 4, "K must have shape [B, H, N, D]");
@@ -54,12 +54,12 @@ void forwardCPU(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor
 
                 torch::Tensor Q_tile = Q_item.slice(0, q_start, q_end);
 
-                torch::Tensor m_i = torch::full({q_rows}, -std::numeric_limits<float>::infinity(), Q.options().dtype(torch::kFloat32));
-                torch::Tensor l_i = torch::zeros({q_rows}, Q.options().dtype(torch::kFloat32));
-                torch::Tensor O_i = torch::zeros({q_rows, d}, Q.options().dtype(torch::kFloat32));
+                torch::Tensor m_i = torch::full({q_rows}, -std::numeric_limits<float>::infinity(), Q.options().dtype(torch::kBFloat16));
+                torch::Tensor l_i = torch::zeros({q_rows}, Q.options().dtype(torch::kBFloat16));
+                torch::Tensor O_i = torch::zeros({q_rows, d}, Q.options().dtype(torch::kBFloat16));
 
-                torch::Tensor m_new = torch::full({q_rows}, -std::numeric_limits<float>::infinity(), Q.options().dtype(torch::kFloat32));
-                torch::Tensor l_new = torch::zeros({q_rows}, Q.options().dtype(torch::kFloat32));
+                torch::Tensor m_new = torch::full({q_rows}, -std::numeric_limits<float>::infinity(), Q.options().dtype(torch::kBFloat16));
+                torch::Tensor l_new = torch::zeros({q_rows}, Q.options().dtype(torch::kBFloat16));
 
                 for(int kv_idx=0; kv_idx<Tc; kv_idx++){
                     //index into K, V
