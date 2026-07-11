@@ -8,3 +8,4 @@
 *.json
 /.venv/
 /CMakeFiles/out/logs/
+out/logs/
