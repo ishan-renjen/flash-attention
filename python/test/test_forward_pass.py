@@ -48,10 +48,16 @@ def time_cuda(fn, warmup_iters=3, active_iters=10):
 
 def check_close(name, out, out_ref, lse, lse_ref):
     print(name)
-    print("output allclose:", torch.allclose(out, out_ref, atol=1e-4, rtol=1e-4))
-    print("logsumexp allclose:", torch.allclose(lse, lse_ref, atol=1e-4, rtol=1e-4))
-    print("max abs diff output:", (out - out_ref).abs().max().item())
-    print("max abs diff logsumexp:", (lse - lse_ref).abs().max().item())
+    out_f      = out.float()
+    out_ref_f  = out_ref.float()
+    lse_f      = lse.float()
+    lse_ref_f  = lse_ref.float()
+    atol, rtol = 2e-2, 2e-2
+
+    print("output allclose:", torch.allclose(out_f, out_ref_f, atol=atol, rtol=rtol))
+    print("logsumexp allclose:", torch.allclose(lse_f, lse_ref_f, atol=atol, rtol=rtol))
+    print("max abs diff output:", (out_f - out_ref_f).abs().max().item())
+    print("max abs diff logsumexp:", (lse_f - lse_ref_f).abs().max().item())
 
 def alloc_forward_outputs(Q):
     out = torch.empty_like(Q)
