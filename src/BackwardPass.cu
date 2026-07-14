@@ -52,9 +52,9 @@ __global__ void backwardKernel(const __nv_bfloat16* __restrict__ Q, const __nv_b
     __nv_bfloat16* Qi  = reinterpret_cast<__nv_bfloat16*>(Li + vec_tile_size);
     __nv_bfloat16* Kj  = &Qi[q_tile_size];
     __nv_bfloat16* Vj  = &Kj[kv_tile_size];
-    __nv_bfloat16* dOi = &Oi[q_tile_size];
+    __nv_bfloat16* dOi = &Vj[q_tile_size];
     __nv_bfloat16* dQi = &dOi[q_tile_size];
-    __nv_bfloat16* Di  = &Li[vec_tile_size];
+    __nv_bfloat16* Di  = &dQi[vec_tile_size];
     __nv_bfloat16* dKj = &Di[vec_tile_size];
     __nv_bfloat16* dVj = &dKj[kv_tile_size];
     __nv_bfloat16* Sij  = &dVj[kv_tile_size];
@@ -107,13 +107,13 @@ __global__ void backwardKernel(const __nv_bfloat16* __restrict__ Q, const __nv_b
                 if (global_row < N) 
                 {
                     Qi[r * d + x]  = Q[row_offset_qkv + r * d + x];
-                    Oi[r * d + x]  = O[row_offset_qkv + r * d + x];
+                    // Oi[r * d + x]  = O[row_offset_qkv + r * d + x];
                     // dOi[r * d + x] = dO[row_offset_qkv + r * d + x];
                 } 
                 else 
                 {
                     Qi[r * d + x]  = (__nv_bfloat16)0.0f;
-                    Oi[r * d + x]  = (__nv_bfloat16)0.0f;
+                    // Oi[r * d + x]  = (__nv_bfloat16)0.0f;
                     dOi[r * d + x] = (__nv_bfloat16)0.0f;
                 }
 
