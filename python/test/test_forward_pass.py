@@ -76,9 +76,9 @@ def main():
     device_gpu = torch.device("cuda") if has_cuda else None
     device_cpu = torch.device("cpu")
 
-    Q_cpu = torch.rand(B, H, N, D, device=device_cpu, dtype=torch.float32).contiguous()
-    K_cpu = torch.rand(B, H, N, D, device=device_cpu, dtype=torch.float32).contiguous()
-    V_cpu = torch.rand(B, H, N, D, device=device_cpu, dtype=torch.float32).contiguous()
+    Q_cpu = torch.rand(B, H, N, D, device=device_cpu, dtype=torch.bfloat16).contiguous()
+    K_cpu = torch.rand(B, H, N, D, device=device_cpu, dtype=torch.bfloat16).contiguous()
+    V_cpu = torch.rand(B, H, N, D, device=device_cpu, dtype=torch.bfloat16).contiguous()
 
     if has_cuda:
         Q_gpu = Q_cpu.to(device_gpu).contiguous()

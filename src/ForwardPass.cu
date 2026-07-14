@@ -16,7 +16,7 @@
 #define D 64
 
 __global__ void forwardKernel(const __nv_bfloat16* __restrict__ Q, const __nv_bfloat16* __restrict__ K, const __nv_bfloat16* __restrict__ V, 
-                                    __nv_bfloat16* __restrict__ O, __nv_bfloat16* __restrict__ LSE, 
+                                    __nv_bfloat16* __restrict__ O, float* __restrict__ LSE, 
                                     const int N, const int Tc, const float scale,
                                     int Br, int Bc) {
     const int b  = blockIdx.x;
@@ -143,7 +143,7 @@ __global__ void forwardKernel(const __nv_bfloat16* __restrict__ Q, const __nv_bf
             O[qkv_base + q_row * D + x] = __float2bfloat16(o_accum[x] * inv_l);
         }
 
-        LSE[lse_base + q_row] = __float2bfloat16(m + __logf(l));
+        LSE[lse_base + q_row] = m + __logf(l);
     }
 }
 
@@ -159,12 +159,15 @@ void forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O,
     TORCH_CHECK(Q.dim() == 4, "Q must have shape [B, H, N, d]");
     TORCH_CHECK(K.dim() == 4, "K must have shape [B, H, N, d]");
     TORCH_CHECK(V.dim() == 4, "V must have shape [B, H, N, d]");
+
     TORCH_CHECK(Q.sizes() == K.sizes() && Q.sizes() == V.sizes(), "Q/K/V shape mismatch");
 
     const int B = Q.size(0);
     const int H = Q.size(1);
     const int N = Q.size(2);
     const int d = Q.size(3);
+
+    TORCH_CHECK(d == D, "forwardKernel is compiled for head_dim == ", D, ", got ", d);
 
     constexpr int Br = 16;
     constexpr int Bc = 16;
@@ -180,7 +183,7 @@ void forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O,
     auto K_ptr   = reinterpret_cast<const __nv_bfloat16*>(K.data_ptr<at::BFloat16>());
     auto V_ptr   = reinterpret_cast<const __nv_bfloat16*>(V.data_ptr<at::BFloat16>());
     auto O_ptr   = reinterpret_cast<__nv_bfloat16*>(O.data_ptr<at::BFloat16>());
-    auto LSE_ptr = reinterpret_cast<__nv_bfloat16*>(LSE.data_ptr<at::BFloat16>());
+    auto LSE_ptr = LSE.data_ptr<float>();
 
     const size_t smem = (Br * 64 + 2 * Bc * 64 + Br * Bc) * sizeof(__nv_bfloat16);
     forwardKernel<<<grid, block, smem>>>(

@@ -40,20 +40,20 @@ __global__ void backwardKernel(const __nv_bfloat16* __restrict__ Q, const __nv_b
     int global_col = col_base + c;                  // starting index + offset of current thread
     int col_offset_qkv = qkv_offset + col_base * d; // Base address of tile 
 
-    extern __shared__ __nv_bfloat16 sram[];
+    extern __shared__ unsigned char sram_raw[];
 
     int q_tile_size  = Br * d;    // Qi, Oi, dOi, dQi
     int kv_tile_size = Bc * d;    // Kj, Vj, dKj, dVj
     int s_tile_size  = Br * Bc;   // Sij, Pij, dPij, dSij
     int vec_tile_size = Br;       // Li, Di
 
-    __nv_bfloat16* Qi  = sram;
+    float* Li = reinterpret_cast<float*>(sram_raw);
+
+    __nv_bfloat16* Qi  = reinterpret_cast<__nv_bfloat16*>(Li + vec_tile_size);
     __nv_bfloat16* Kj  = &Qi[q_tile_size];
     __nv_bfloat16* Vj  = &Kj[kv_tile_size];
-    __nv_bfloat16* Oi  = &Vj[kv_tile_size];
     __nv_bfloat16* dOi = &Oi[q_tile_size];
     __nv_bfloat16* dQi = &dOi[q_tile_size];
-    __nv_bfloat16* Li  = &dQi[q_tile_size];
     __nv_bfloat16* Di  = &Li[vec_tile_size];
     __nv_bfloat16* dKj = &Di[vec_tile_size];
     __nv_bfloat16* dVj = &dKj[kv_tile_size];
@@ -108,7 +108,7 @@ __global__ void backwardKernel(const __nv_bfloat16* __restrict__ Q, const __nv_b
                 {
                     Qi[r * d + x]  = Q[row_offset_qkv + r * d + x];
                     Oi[r * d + x]  = O[row_offset_qkv + r * d + x];
-                    dOi[r * d + x] = dO[row_offset_qkv + r * d + x];
+                    // dOi[r * d + x] = dO[row_offset_qkv + r * d + x];
                 } 
                 else 
                 {
@@ -130,7 +130,7 @@ __global__ void backwardKernel(const __nv_bfloat16* __restrict__ Q, const __nv_b
                 } 
                 else 
                 {
-                    Li[r] = (__nv_bfloat16)0.0f;
+                    Li[r] = 0.0f;
                     Di[r] = (__nv_bfloat16)0.0f;
                 }
             }
@@ -171,7 +171,7 @@ __global__ void backwardKernel(const __nv_bfloat16* __restrict__ Q, const __nv_b
             // Check for threads that are out-of-bounds
             if (global_row < N && global_col < N) 
             {
-                Pij[r * Bc + c] = __expf(Sij[r * Bc + c] - Li[r]);
+                Pij[r * Bc + c] = __expf(__bfloat162float(Sij[r * Bc + c]) - Li[r]);
             } 
             else 
             {
@@ -272,7 +272,7 @@ __global__ void backwardKernel(const __nv_bfloat16* __restrict__ Q, const __nv_b
         {
             for (int x = c; x < d; x += Bc) 
             {
-                atomicAdd(&dQ[row_offset_qkv + r * d + x], dQi[r * d + x]);
+                atomicAdd(&dQ[row_offset_qkv + r * d + x], __bfloat162float(dQi[r * d + x]));
             }
         }
 
@@ -298,6 +298,7 @@ __global__ void backwardKernel(const __nv_bfloat16* __restrict__ Q, const __nv_b
                 }
             }
         }
+        __syncthreads();
     }
 
     __syncthreads();
@@ -359,6 +360,8 @@ void backward(torch::Tensor Q, torch::Tensor K, torch::Tensor V,
     TORCH_CHECK(O.size(2) == dO.size(2) && O.size(2) == Q.size(2), "(O,dO) - Sequence length mismatch");
     TORCH_CHECK(O.size(3) == dO.size(3) && O.size(3) == Q.size(3), "(O,dO) - Head dimension mismatch");
 
+    dQ.zero_(); 
+
     const int batchSize = Q.size(0);
     const int numHeads = Q.size(1);
     const int N = Q.size(2);
@@ -377,7 +380,7 @@ void backward(torch::Tensor Q, torch::Tensor K, torch::Tensor V,
     // [Br x d]  : Qi, Oi, dOi, dQi
     // [Br x Bc] : Sij, Pij, dPij, dSij (Temps)
     // [Br]      : Li, Di
-    const int sramSize = ((4 * Bc * d) + (4 * Br * d) + (4 * Br * Bc) + (2 * Br)) * sizeof(__nv_bfloat16);
+    const int sramSize = Br * sizeof(float) + ((3 * Br * d) + (4 * Bc * d) + (4 * Br * Bc) + Br) * sizeof(__nv_bfloat16);
     int maxSramSize;
     int dev = Q.get_device();
     cudaDeviceGetAttribute(&maxSramSize, cudaDevAttrMaxSharedMemoryPerBlock, dev);
@@ -387,7 +390,8 @@ void backward(torch::Tensor Q, torch::Tensor K, torch::Tensor V,
         throw std::runtime_error("Requested shared memory exceeds device limit");
     }
 
-    auto opts = torch::TensorOptions().dtype(Q.dtype()).device(Q.device());
+    auto opts_fp32 = torch::TensorOptions().dtype(torch::kFloat32).device(Q.device());
+    auto dQ_fp32 = torch::zeros({batchSize, numHeads, N, d}, opts_fp32);
 
     dim3 gridDim(Tc, numHeads, batchSize); // (Tc x numHeads x batchSize) blocks per grid
     dim3 blockDim(Br, Bc);                 // (Br x Bc) threads per block
@@ -424,4 +428,6 @@ void backward(torch::Tensor Q, torch::Tensor K, torch::Tensor V,
         attentionScalar);
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+    dQ.copy_(dQ_fp32.to(Q.scalar_type()));
 }
