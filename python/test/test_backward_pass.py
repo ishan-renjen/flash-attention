@@ -65,7 +65,7 @@ def alloc_backward_outputs(Q, K, V, O, dO):
     dQ = torch.zeros_like(Q)
     dK = torch.zeros_like(K)
     dV = torch.zeros_like(V)
-    D = torch.sum(O * dO, axis=-1)
+    D = torch.sum(O.float() * dO.float(), dim=-1, dtype=torch.float32).contiguous()
     return dQ, dK, dV, D
 
 def main():
