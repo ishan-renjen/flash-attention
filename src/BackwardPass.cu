@@ -13,7 +13,7 @@
 
 __global__ void backwardKernel(const __nv_bfloat16* __restrict__ Q, const __nv_bfloat16* __restrict__ K, const __nv_bfloat16* __restrict__ V,   //Query, Key, Value
                                 const __nv_bfloat16* __restrict__ O, const __nv_bfloat16* __restrict__ dO,                 //output, output gradient
-                                const __nv_bfloat16* __restrict__ L, const __nv_bfloat16* __restrict__ D,                  // logsumexp, normalization terms
+                                const float* __restrict__ L, const __nv_bfloat16* __restrict__ D,                  // logsumexp, normalization terms
                                 __nv_bfloat16* __restrict__ dQ, __nv_bfloat16* __restrict__ dK, __nv_bfloat16* __restrict__ dV,                 // Query, Key, Value gradients
                                 const unsigned int N, const unsigned int d,      //dimensions of QKV matrices [N, d]
                                 const unsigned int Br, const unsigned int Bc,    //block sizes [Br, Bc]
@@ -402,7 +402,7 @@ void backward(torch::Tensor Q, torch::Tensor K, torch::Tensor V,
     const auto* V_ptr = reinterpret_cast<const __nv_bfloat16*>(V.data_ptr<at::BFloat16>());
     const auto* O_ptr = reinterpret_cast<const __nv_bfloat16*>(O.data_ptr<at::BFloat16>());
     const auto* dO_ptr = reinterpret_cast<const __nv_bfloat16*>(dO.data_ptr<at::BFloat16>());
-    const auto* L_ptr = reinterpret_cast<const __nv_bfloat16*>(L.data_ptr<at::BFloat16>());
+    const auto* L_ptr = reinterpret_cast<const float*>(L.data_ptr<at::BFloat16>());
     const auto* D_ptr = reinterpret_cast<const __nv_bfloat16*>(D.data_ptr<at::BFloat16>());
     auto* dQ_ptr = reinterpret_cast<__nv_bfloat16*>(dQ.data_ptr<at::BFloat16>());
     auto* dK_ptr = reinterpret_cast<__nv_bfloat16*>(dK.data_ptr<at::BFloat16>());

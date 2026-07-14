@@ -13,6 +13,41 @@ flash_attn = load(name="flash_attn_ext",
                  ], 
                          verbose=True)
 
+import torch.nn.functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
+
+def run_sdpa_gpu(Q, K, V):
+    with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+        return F.scaled_dot_product_attention(Q, K, V)
+
+def sweep(B, H, D, Ns, device):
+    results = []
+    for N in Ns:
+        torch.manual_seed(0)
+        Q = torch.rand(B, H, N, D, device=device, dtype=torch.bfloat16).contiguous()
+        K = torch.rand(B, H, N, D, device=device, dtype=torch.bfloat16).contiguous()
+        V = torch.rand(B, H, N, D, device=device, dtype=torch.bfloat16).contiguous()
+
+        def run_naive():
+            return dot_product_attention(Q, K, V)
+
+        def run_sdpa():
+            return run_sdpa_gpu(Q, K, V)
+
+        def run_flash():
+            out, lse = alloc_forward_outputs(Q)
+            flash_attn.flashattention_forward(Q, K, V, out, lse)
+            return out, lse
+
+        naive_ms = time_cuda(run_naive)
+        sdpa_ms  = time_cuda(run_sdpa)
+        flash_ms = time_cuda(run_flash)
+
+        results.append((N, naive_ms, sdpa_ms, flash_ms))
+        print(f"N={N:6d}  naive={naive_ms:8.4f}ms  sdpa={sdpa_ms:8.4f}ms  "
+              f"yours={flash_ms:8.4f}ms  yours/sdpa={flash_ms/sdpa_ms:.2f}x")
+    return results
+
 def dot_product_attention(q, k, v):
     scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(q.size(-1))
     probs = torch.softmax(scores, dim=-1)
@@ -140,6 +175,8 @@ def main():
 
     print(f"CPU reference forward: {ref_cpu_ms:.4f} ms / iter")
     print(f"CPU flash forward:     {flash_cpu_ms:.4f} ms / iter")
+
+    sweep(B=1, H=8, D=64, Ns=[128, 512, 1024, 2048, 4096, 8192], device=torch.device("cuda"))
 
 if __name__ == "__main__":
     main()
