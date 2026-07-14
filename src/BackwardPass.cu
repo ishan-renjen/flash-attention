@@ -393,19 +393,35 @@ void backward(torch::Tensor Q, torch::Tensor K, torch::Tensor V,
     dim3 blockDim(Br, Bc);                 // (Br x Bc) threads per block
     
     // Launch kernel
+    const auto* Q_ptr = reinterpret_cast<const __nv_bfloat16*>(Q.data_ptr<at::BFloat16>());
+    const auto* K_ptr = reinterpret_cast<const __nv_bfloat16*>(K.data_ptr<at::BFloat16>());
+    const auto* V_ptr = reinterpret_cast<const __nv_bfloat16*>(V.data_ptr<at::BFloat16>());
+    const auto* O_ptr = reinterpret_cast<const __nv_bfloat16*>(O.data_ptr<at::BFloat16>());
+    const auto* dO_ptr = reinterpret_cast<const __nv_bfloat16*>(dO.data_ptr<at::BFloat16>());
+    const auto* L_ptr = reinterpret_cast<const __nv_bfloat16*>(L.data_ptr<at::BFloat16>());
+    const auto* D_ptr = reinterpret_cast<const __nv_bfloat16*>(D.data_ptr<at::BFloat16>());
+    auto* dQ_ptr = reinterpret_cast<__nv_bfloat16*>(dQ.data_ptr<at::BFloat16>());
+    auto* dK_ptr = reinterpret_cast<__nv_bfloat16*>(dK.data_ptr<at::BFloat16>());
+    auto* dV_ptr = reinterpret_cast<__nv_bfloat16*>(dV.data_ptr<at::BFloat16>());
+
     backwardKernel<<<gridDim, blockDim, sramSize>>>(
-        Q.data_ptr<__nv_bfloat16>(),
-        K.data_ptr<__nv_bfloat16>(),
-        V.data_ptr<__nv_bfloat16>(),
-        O.data_ptr<__nv_bfloat16>(),
-        dO.data_ptr<__nv_bfloat16>(),
-        L.data_ptr<__nv_bfloat16>(),
-        D.data_ptr<__nv_bfloat16>(),
-        dQ.data_ptr<__nv_bfloat16>(),
-        dK.data_ptr<__nv_bfloat16>(),
-        dV.data_ptr<__nv_bfloat16>(),
-        N, d, Br, Bc, Tr, Tc,
-        attentionScalar); 
+        Q_ptr,
+        K_ptr,
+        V_ptr,
+        O_ptr,
+        dO_ptr,
+        L_ptr,
+        D_ptr,
+        dQ_ptr,
+        dK_ptr,
+        dV_ptr,
+        N,
+        d,
+        Br,
+        Bc,
+        Tr,
+        Tc,
+        attentionScalar);
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
